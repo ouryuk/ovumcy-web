@@ -84,6 +84,22 @@ The same settings can also be read and changed from the local operator CLI
 below. That path is for an operator managing an account from the server shell,
 not a replacement for the Settings-page form.
 
+### Testing the endpoint
+
+Once a URL is saved, the same settings card offers **Send test notification**.
+It sends exactly one message through the same hardened webhook transport the
+reminder pass uses, to the endpoint currently stored — not to a value typed into
+the form. The test is deliberately **not** a period or ovulation reminder: its
+`type` is `test`, it carries no predicted date or lead-day claim, and it changes
+no settings, watermark, or delivery mark.
+
+The button is available while reminder delivery is switched off, so an owner can
+verify an endpoint before arming it. A success message means the endpoint
+answered 2xx (accepted, not necessarily displayed); an unreachable endpoint, a
+non-2xx response, or a missing/unreadable stored URL is reported in the card with
+copy describing the next action. The request is CSRF-protected and the stored URL
+(and any token in it) is never echoed into the response or a log line.
+
 ### How delivery works
 
 Delivery is a **request-free batch pass**: at pass time, Ovumcy looks at every

@@ -477,5 +477,8 @@ func bootstrapOptions(config runtimeConfig) bootstrap.Options {
 		// The same flag that decides whether the scheduler runs decides what the
 		// settings surface may claim about webhook delivery.
 		OutboundDeliveryEnabled: config.ReminderScheduler.Enabled,
+		// The settings test action must honor the same egress gate as the
+		// scheduled pass and `ovumcy notify`.
+		WebhookBlockPrivateAddresses: config.WebhookBlockPrivate,
 	}
 }

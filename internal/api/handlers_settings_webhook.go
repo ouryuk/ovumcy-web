@@ -1,11 +1,17 @@
 package api
 
 import (
+	"time"
+
 	"github.com/gofiber/fiber/v3"
+	"github.com/ovumcy/ovumcy-web/internal/models"
 	"github.com/ovumcy/ovumcy-web/internal/services"
 )
 
-var webhookSettingsMutation = healthMutationKind{action: "settings.webhook_update", target: "webhook_settings"}
+var (
+	webhookSettingsMutation = healthMutationKind{action: "settings.webhook_update", target: "webhook_settings"}
+	webhookTestMutation     = healthMutationKind{action: "settings.webhook_test", target: "webhook"}
+)
 
 // UpdateWebhookSettings persists an owner's webhook notification settings
 // (issue #124): the enable toggle, the two per-kind notify toggles, and the
@@ -84,4 +90,38 @@ func parseWebhookSettingsInput(c fiber.Ctx) (webhookSettingsInput, error) {
 		NotifyOvulation: services.ParseBoolLike(c.FormValue("webhook_notify_ovulation")),
 		RemoveURL:       services.ParseBoolLike(c.FormValue("webhook_remove_url")),
 	}, nil
+}
+
+// SendTestWebhook delivers one owner-initiated test notification to the
+// CURRENTLY STORED endpoint. It is a POST for the same reason the save is: it
+// reaches outside this instance, so it must be CSRF-protected and OwnerOnly at
+// the route layer. It changes no settings and writes no watermark.
+//
+// The handler passes only the owner-scoped delivery projection — id, stored
+// ciphertext, timezone, and interface language — never a health row. The
+// service decrypts with that owner's AAD and reuses the notify pass's hardened
+// deliverer, so this path cannot become a second, weaker egress client.
+//
+// Secret discipline: the endpoint is never rendered back and no error text is
+// logged. A success answers the rebuilt egress card with a status key; a refusal
+// answers the same card with localized copy, so the owner sees the test result
+// where the button is and the page still shows the stored host (never the URL).
+func (handler *Handler) SendTestWebhook(c fiber.Ctx) error {
+	user, ok := currentUser(c)
+	if !ok {
+		return handler.failMutation(c, webhookTestMutation, unauthorizedErrorSpec())
+	}
+
+	record := models.WebhookNotifyRecord{
+		ID:                user.ID,
+		Timezone:          user.Timezone,
+		InterfaceLanguage: user.InterfaceLanguage,
+		WebhookURL:        user.WebhookURL,
+	}
+	if err := handler.webhookNotifySvc.SendTest(c.Context(), record, time.Now(), handler.requestLocation(c)); err != nil {
+		return handler.failEgressMutation(c, webhookTestMutation, user, mapWebhookTestError(err))
+	}
+
+	handler.logMutationSuccess(c, webhookTestMutation)
+	return handler.respondEgressMutation(c, user, services.SettingsWebhookTestedStatus)
 }

@@ -261,6 +261,18 @@ var localizedFormatContracts = []localizedFormatContract{
 		argumentTypes: []string{"string"},
 		note:          "reminder.EventDate formatted as 2006-01-02",
 	},
+	{
+		// The test message leaves the instance through the same outbound
+		// transport as a reminder, so its date placeholder owes the same
+		// arity check. There is no fallback literal: the service sends the
+		// headline alone if a catalogue entry is missing.
+		file:          "internal/services/webhook_notify_service.go",
+		function:      "buildTestPayload",
+		keys:          []string{"webhook.test.message"},
+		verbs:         []string{"%s"},
+		argumentTypes: []string{"string"},
+		note:          "eventDate formatted as 2006-01-02",
+	},
 }
 
 // goFormatSite is one `fmt.Sprintf` whose format string is computed rather than

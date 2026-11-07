@@ -11,3 +11,10 @@ const SettingsWebhookUpdatedStatus = "webhook_updated"
 // "withdrawn" are different events to the owner, and the ledger's whole subject
 // is that a surface says which one happened.
 const SettingsWebhookRemovedStatus = "webhook_removed"
+
+// SettingsWebhookTestedStatus is the outcome key for a test notification the
+// stored endpoint accepted. It says ACCEPTED, not received: a 2xx is all this
+// instance can prove. The copy deliberately does not reuse webhook_updated — a
+// probe is not a settings change, and a surface that called it one would imply
+// the saved configuration had moved.
+const SettingsWebhookTestedStatus = "webhook_tested"

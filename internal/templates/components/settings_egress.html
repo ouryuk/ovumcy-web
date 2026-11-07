@@ -126,6 +126,39 @@
         </div>
       </form>
 
+      {{/* A test sends ONE non-period, non-ovulation message to the endpoint
+           that is ALREADY stored. It is not part of the save: it changes no
+           setting, writes no watermark, and works while reminder delivery is
+           switched off — which is exactly when an owner wants to verify the
+           destination before arming it. The card answers in place through the
+           same outerHTML swap as the other mutations, so the outcome appears
+           beside the button and the stored host stays visible (never the URL).
+
+           Offered only where a host can be named. An unreadable endpoint is a
+           different problem with a different remedy (save a new one or withdraw
+           it), and a button that could only fail would be noise. */}}
+      {{if .Egress.Webhook.Host}}
+      <div class="space-y-2">
+        <p class="journal-muted text-sm">{{t .Messages "settings.webhook.test_hint"}}</p>
+        <div class="settings-form-actions">
+          <form
+            action="/api/v1/users/current/webhook/test"
+            method="post"
+            hx-post="/api/v1/users/current/webhook/test"
+            hx-target="#settings-egress"
+            hx-swap="outerHTML"
+            data-save-feedback>
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <button
+              type="submit"
+              class="btn-secondary"
+              data-save-button
+              data-saving-label="{{t .Messages "common.saving"}}">{{t .Messages "settings.webhook.test"}}</button>
+          </form>
+        </div>
+      </div>
+      {{end}}
+
       {{/* Withdrawing the endpoint is its own request, not a checkbox on the
            save. The save rewrites both per-kind opt-ins from whatever the form
            carried, and while ENABLING it cannot act at all on a row this

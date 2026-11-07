@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -159,6 +160,37 @@ const (
 	reminderOvulationMessageKey = "webhook.reminder.ovulation.message"
 )
 
+// Test-delivery copy keys. A test notification is deliberately NOT a reminder
+// kind: it carries no predicted date and must never be mistaken for a period or
+// ovulation message by a consumer routing on type. The catalogue keys keep the
+// payload in the owner's chosen language, exactly like the reminder copy above.
+const (
+	webhookTestTitleKey   = "webhook.test.title"
+	webhookTestMessageKey = "webhook.test.message"
+)
+
+// WebhookTestType is the machine-readable kind carried by a test delivery. It is
+// not one of the DueReminderType* values, so a consumer can never confuse a test
+// with a real cycle reminder.
+const WebhookTestType = "test"
+
+var (
+	// ErrWebhookTestNotConfigured means the owner asked for a test but no stored
+	// endpoint exists (or it decrypted to an empty value). Nothing was sent.
+	ErrWebhookTestNotConfigured = errors.New("webhook test endpoint not configured")
+	// ErrWebhookTestEndpointUnreadable means a ciphertext is stored but this
+	// instance cannot open it (typically after a SECRET_KEY rotation). Nothing
+	// was sent, and the error carries neither the ciphertext nor the decrypt
+	// error's text.
+	ErrWebhookTestEndpointUnreadable = errors.New("webhook test endpoint unreadable")
+	// ErrWebhookTestDeliveryFailed means the configured endpoint did not accept
+	// the test (transport error, timeout, redirect, non-2xx, or a scheme the
+	// delivery client refuses). The underlying error is intentionally not
+	// wrapped: the hardened deliverer already logs the destination HOST only,
+	// and the handler needs a stable, secret-free sentinel to map.
+	ErrWebhookTestDeliveryFailed = errors.New("webhook test delivery failed")
+)
+
 // NotifyReport is the transport-free result of one notify pass. It never carries
 // a URL, token, or payload — a destination appears as a HOST at most.
 // OwnerIDsFailed lets an operator see WHICH owners failed (an id is not a secret)
@@ -236,6 +268,60 @@ func NewWebhookNotifyService(
 		decryptor: decryptor,
 		deliverer: deliverer,
 		localized: localized,
+	}
+}
+
+// SendTest delivers ONE non-period, non-ovulation test notification to the
+// owner's currently stored endpoint. It reuses the SAME decryptor, hardened
+// deliverer, and localized-copy provider the request-free notify pass uses, so a
+// test exercises the real transport rather than a parallel client.
+//
+// It deliberately does not read or write a watermark, the delivery mark, the
+// enable toggle, or either per-kind opt-in: a test is an owner-initiated probe
+// of the stored destination, not a cycle reminder and not a settings change. The
+// endpoint therefore works even while reminder delivery is switched off, which
+// is exactly when an owner wants to verify it before arming it.
+//
+// The payload carries no health specifics: Type is WebhookTestType, LeadDays is
+// zero, and the title/message are dedicated catalogue entries. No URL, token,
+// ciphertext, or decrypt error text is returned in an error value.
+func (service *WebhookNotifyService) SendTest(ctx context.Context, record models.WebhookNotifyRecord, now time.Time, location *time.Location) error {
+	if strings.TrimSpace(record.WebhookURL) == "" {
+		return ErrWebhookTestNotConfigured
+	}
+	decryptedURL, err := service.decryptor.DecryptWebhookURL(record.ID, record.WebhookURL)
+	if err != nil {
+		return ErrWebhookTestEndpointUnreadable
+	}
+	if strings.TrimSpace(decryptedURL) == "" {
+		return ErrWebhookTestNotConfigured
+	}
+
+	ownerLocation := resolveOwnerLocation(record.Timezone, location)
+	eventDate := now.In(ownerLocation)
+	if err := service.deliverer.Deliver(ctx, decryptedURL, service.buildTestPayload(record.InterfaceLanguage, eventDate)); err != nil {
+		return ErrWebhookTestDeliveryFailed
+	}
+	return nil
+}
+
+// buildTestPayload assembles the fixed, health-free test body. It shares the
+// localized-copy seam with buildPayload so the test is written in the owner's
+// interface language and always carries the mandatory medical-safety
+// disclaimer.
+func (service *WebhookNotifyService) buildTestPayload(language string, eventDate time.Time) WebhookPayload {
+	title := service.localized.Message(language, webhookTestTitleKey)
+	message := service.localized.Message(language, webhookTestMessageKey)
+	if message != "" {
+		message = fmt.Sprintf(message, eventDate.Format("2006-01-02"))
+	}
+	return WebhookPayload{
+		Title:      title,
+		Message:    message,
+		Disclaimer: service.localized.Disclaimer(language),
+		Type:       WebhookTestType,
+		EventDate:  eventDate.Format("2006-01-02"),
+		LeadDays:   0,
 	}
 }
 

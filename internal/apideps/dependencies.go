@@ -30,6 +30,7 @@ type Dependencies struct {
 	SettingsService        *services.SettingsService
 	SettingsViewService    *services.SettingsViewService
 	WebhookSettingsService *services.WebhookSettingsService
+	WebhookNotifyService   *services.WebhookNotifyService
 	OnboardingService      *services.OnboardingService
 	SetupService           *services.SetupService
 	TOTPService            *services.TOTPService
@@ -79,6 +80,7 @@ func (dependencies Dependencies) requirements() []dependencyRequirement {
 		{value: dependencies.SettingsService, message: "settings service is required"},
 		{value: dependencies.SettingsViewService, message: "settings view service is required"},
 		{value: dependencies.WebhookSettingsService, message: "webhook settings service is required"},
+		{value: dependencies.WebhookNotifyService, message: "webhook notify service is required"},
 		{value: dependencies.OnboardingService, message: "onboarding service is required"},
 		{value: dependencies.SetupService, message: "setup service is required"},
 		{value: dependencies.TOTPService, message: "totp service is required"},

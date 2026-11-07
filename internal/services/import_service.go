@@ -146,7 +146,16 @@ func (service *ImportService) ImportJSON(ctx context.Context, userID uint, raw [
 		return ImportResult{}, ErrImportTooLarge
 	}
 
-	planned, otherOriginals, rejected := service.planEntries(payload.Entries, location)
+	return service.restore(ctx, userID, payload.Entries, location)
+}
+
+// restore is the shared additive write path for every import format: validate
+// and plan the entries, reconcile the owner's symptom catalog, then create only
+// the days the account does not already have. Keeping the JSON and CSV parsers
+// on this one path is what makes their owner scoping, skip-existing contract,
+// batching and derived-settings refresh identical instead of merely similar.
+func (service *ImportService) restore(ctx context.Context, userID uint, entries []ExportJSONEntry, location *time.Location) (ImportResult, error) {
+	planned, otherOriginals, rejected := service.planEntries(entries, location)
 
 	catalogByKey, builtins, err := service.reconcileSymptoms(ctx, userID, otherOriginals)
 	if err != nil {

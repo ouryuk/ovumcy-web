@@ -137,6 +137,7 @@ func registerV1APIRoutes(app *fiber.App, handler *Handler) {
 
 	stats := v1.Group("/stats", handler.AuthRequired)
 	stats.Get("/overview", handler.OwnerOnly, handler.GetStatsOverview)
+	stats.Get("/cycles", handler.OwnerOnly, handler.GetCycleHistory)
 
 	exports := v1.Group("/exports", handler.AuthRequired, handler.OwnerOnly)
 	exports.Get("/summary", handler.ExportSummary)

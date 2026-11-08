@@ -32,3 +32,28 @@ func (handler *Handler) GetStatsOverview(c fiber.Ctx) error {
 
 	return c.JSON(newStatsOverviewResponse(published, suppression, confirmed, handler.medicalDisclaimer(c)))
 }
+
+// GetCycleHistory publishes the owner's individual completed cycles, oldest
+// first. It is the per-cycle counterpart to GetStatsOverview: the aggregate
+// endpoint answers the averages, this one answers "what were my last cycles,
+// one by one".
+//
+// The builder reuses the overview's log read and cycle detection, so an empty
+// history is an empty array with 200 — not a 404 and not a 500. The only
+// fallible step is the repository read, which keeps the existing stats fetch
+// error mapping.
+func (handler *Handler) GetCycleHistory(c fiber.Ctx) error {
+	user, ok := currentUser(c)
+	if !ok {
+		return handler.respondMappedError(c, unauthorizedErrorSpec())
+	}
+
+	location := handler.requestLocation(c)
+	now := time.Now().In(location)
+	entries, err := handler.statsService.BuildCycleHistory(c.Context(), user, now, location)
+	if err != nil {
+		return handler.respondMappedError(c, statsFetchErrorSpec())
+	}
+
+	return c.JSON(newCycleHistoryResponse(entries))
+}

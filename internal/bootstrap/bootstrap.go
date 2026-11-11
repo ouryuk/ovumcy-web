@@ -50,6 +50,11 @@ type Options struct {
 	// instance every webhook column is inert, and a surface that called such a
 	// row "armed" would claim a capability the process does not have.
 	OutboundDeliveryEnabled bool
+	// WebhookBlockPrivateAddresses wires the off-by-default egress gate into
+	// the handler's owner-initiated test delivery. It must mirror the same
+	// config the CLI and scheduler pass to BuildNotifyService, or a test could
+	// reach an address the configured delivery path refuses.
+	WebhookBlockPrivateAddresses bool
 }
 
 // i18nDisclaimerProvider adapts the i18n Manager to services.NotifyCopyProvider:
@@ -145,6 +150,17 @@ func BuildDependencies(repositories *db.Repositories, secretKey []byte, i18nMana
 		services.DefaultSettingsReauthAttemptsWindow,
 	)
 	webhookSettingsService := services.NewWebhookSettingsService(repositories.Users, secretKey)
+	// The owner-initiated test action reuses the SAME notify service recipe as
+	// the scheduled/CLI pass: one decrypt path, one hardened deliverer, one
+	// localized-copy provider. It is assembled even when the scheduler is off
+	// because a test is user-triggered, not a scheduled pass.
+	webhookNotifyService := services.NewWebhookNotifyService(
+		repositories.Users,
+		repositories.DailyLogs,
+		webhookSettingsService,
+		services.NewWebhookDeliverer(opts.WebhookBlockPrivateAddresses),
+		i18nDisclaimerProvider{manager: i18nManager},
+	)
 	egressLedgerService := services.NewEgressLedgerService(webhookSettingsService, calendarFeedSettingsService, opts.OutboundDeliveryEnabled)
 	totpService := services.NewTOTPService(repositories.Users, secretKey, attemptLimiter)
 	// Every session-issuing path consults the same derived TOTP-verifiability
@@ -188,6 +204,7 @@ func BuildDependencies(repositories *db.Repositories, secretKey []byte, i18nMana
 		SettingsService:        settingsService,
 		SettingsViewService:    services.NewSettingsViewService(settingsService, exportService, symptomService, egressLedgerService),
 		WebhookSettingsService: webhookSettingsService,
+		WebhookNotifyService:   webhookNotifyService,
 		OnboardingService:      services.NewOnboardingService(repositories.Users),
 		SetupService:           services.NewSetupService(repositories.Users),
 		TOTPService:            totpService,

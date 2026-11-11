@@ -113,6 +113,46 @@ func settingsWebhookUpdateErrorSpec() APIErrorSpec {
 	return globalErrorSpec(fiber.StatusInternalServerError, APIErrorCategoryInternal, "failed to update webhook settings")
 }
 
+// settingsWebhookTestNotConfiguredErrorSpec is the owner-fault refusal for a
+// test notification requested before an endpoint exists. It is a 400 with
+// settings-form copy because the remedy is on the same card: save an endpoint,
+// then test again.
+func settingsWebhookTestNotConfiguredErrorSpec() APIErrorSpec {
+	return settingsFormErrorSpec(fiber.StatusBadRequest, APIErrorCategoryValidation, "webhook test not configured")
+}
+
+// settingsWebhookTestUnreadableErrorSpec is the owner-fault refusal for a test
+// against a stored ciphertext this instance cannot open (typically after a
+// SECRET_KEY rotation). It is distinct from "not configured" because the remedy
+// differs: save a new endpoint or withdraw the unreadable one.
+func settingsWebhookTestUnreadableErrorSpec() APIErrorSpec {
+	return settingsFormErrorSpec(fiber.StatusBadRequest, APIErrorCategoryValidation, "webhook test unreadable")
+}
+
+// settingsWebhookTestDeliveryErrorSpec is the refusal for an endpoint the
+// hardened deliverer could not reach or that answered non-2xx. It is a 502
+// rather than a 500: the request was valid and this instance did its part, but
+// the owner-controlled upstream did not accept the delivery. The key never
+// carries the URL, token, or transport error text.
+func settingsWebhookTestDeliveryErrorSpec() APIErrorSpec {
+	return settingsFormErrorSpec(fiber.StatusBadGateway, APIErrorCategoryInternal, "webhook test failed")
+}
+
+// mapWebhookTestError maps the test-delivery sentinels. Anything unrecognized is
+// treated as a delivery failure: the service only returns the three sentinels,
+// and collapsing an unexpected value into the endpoint-facing refusal avoids
+// surfacing internal detail.
+func mapWebhookTestError(err error) APIErrorSpec {
+	switch {
+	case errors.Is(err, services.ErrWebhookTestNotConfigured):
+		return settingsWebhookTestNotConfiguredErrorSpec()
+	case errors.Is(err, services.ErrWebhookTestEndpointUnreadable):
+		return settingsWebhookTestUnreadableErrorSpec()
+	default:
+		return settingsWebhookTestDeliveryErrorSpec()
+	}
+}
+
 // mapSettingsWebhookSaveError maps the webhook-settings save outcome to a spec by
 // matching the service sentinel directly (per the api rule: errors.Is on service
 // sentinels, no classifier indirection). ErrWebhookURLInvalid is the owner's

@@ -2498,6 +2498,58 @@ paths:
                 error_detail: { key: "failed to update webhook settings", category: "internal", target: "global" }
         '429': { $ref: '#/components/responses/RateLimited' }
 
+  /api/v1/users/current/webhook/test:
+    post:
+      tags: [settings]
+      summary: Send one test notification to the stored webhook (owner only).
+      description: |
+        Sends exactly one owner-initiated test message through the same hardened
+        webhook transport the reminder pass uses, to the endpoint CURRENTLY
+        STORED for this owner — never to a URL supplied in the request. The
+        payload has `type: test` and carries no period or ovulation prediction,
+        no lead-day claim, and no health specifics. A test changes no settings,
+        reminder watermark, or accepted-delivery mark, so it works while
+        reminder delivery is switched off.
+
+        Success means the owner-controlled endpoint answered 2xx; acceptance is
+        not a claim that the destination displayed the message. The stored URL —
+        including its path, query, and any embedded token — is never echoed in
+        the response or written to a log.
+      responses:
+        '200':
+          description: |
+            The endpoint accepted the test. JSON clients receive `ok` and the
+            `webhook_tested` status; browser/HTMX clients receive the rebuilt
+            settings card with the same outcome in its status island.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OkResponse' }
+        '400':
+          description: |
+            No stored endpoint is configured, or the stored ciphertext no longer
+            opens under this instance's key (typically after a `SECRET_KEY`
+            rotation). Distinct copy tells the owner whether to save an endpoint
+            or replace/withdraw an unreadable one. Neither case carries the URL.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+              example:
+                error: "webhook test not configured"
+                error_detail: { key: "webhook test not configured", category: "validation", target: "settings_form" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '502':
+          description: |
+            The stored endpoint could not be reached or answered non-2xx. The
+            response carries no URL, token, or transport error text.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+              example:
+                error: "webhook test failed"
+                error_detail: { key: "webhook test failed", category: "internal", target: "settings_form" }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
   /api/v1/users/current/calendar-feed:
     post:
       tags: [settings]

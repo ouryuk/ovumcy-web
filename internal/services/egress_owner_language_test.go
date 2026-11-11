@@ -153,6 +153,10 @@ func TestNotifyPayloadCopyResolvesInEveryLocale(t *testing.T) {
 		"webhook.reminder.period.message",
 		"webhook.reminder.ovulation.title",
 		"webhook.reminder.ovulation.message",
+		// The owner-initiated test action shares this catalogue seam, so its
+		// dedicated copy is under the same six-file contract.
+		"webhook.test.title",
+		"webhook.test.message",
 	}
 	for _, language := range provider.manager.SupportedLanguages() {
 		messages := provider.messages(t, language)

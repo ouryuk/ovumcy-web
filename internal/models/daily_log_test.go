@@ -1,6 +1,7 @@
 package models
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -65,6 +66,28 @@ func TestDailyLogBeforeSave(t *testing.T) {
 	}
 }
 
+func TestCycleFactorConstants(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{name: "stress", got: CycleFactorStress, want: "stress"},
+		{name: "illness", got: CycleFactorIllness, want: "illness"},
+		{name: "travel", got: CycleFactorTravel, want: "travel"},
+		{name: "sleep disruption", got: CycleFactorSleepDisruption, want: "sleep_disruption"},
+		{name: "medication change", got: CycleFactorMedicationChange, want: "medication_change"},
+	}
+
+	for _, testCase := range cases {
+		if testCase.got != testCase.want {
+			t.Fatalf("%s = %q, want %q", testCase.name, testCase.got, testCase.want)
+		}
+	}
+}
+
 func TestDailyLogBeforeSaveInitialisesNilCycleFactorKeys(t *testing.T) {
 	t.Parallel()
 
@@ -79,6 +102,21 @@ func TestDailyLogBeforeSaveInitialisesNilCycleFactorKeys(t *testing.T) {
 	}
 	if len(logEntry.CycleFactorKeys) != 0 {
 		t.Fatalf("CycleFactorKeys = %#v, want an empty slice", logEntry.CycleFactorKeys)
+	}
+}
+
+func TestDailyLogBeforeSaveKeepsCycleFactorKeysOrder(t *testing.T) {
+	t.Parallel()
+
+	keys := []string{CycleFactorStress, CycleFactorIllness, CycleFactorTravel, CycleFactorSleepDisruption, CycleFactorMedicationChange}
+	logEntry := DailyLog{UserID: 1, Date: time.Date(2026, 3, 10, 9, 0, 0, 0, time.UTC), CycleFactorKeys: keys}
+
+	if err := logEntry.BeforeSave(nil); err != nil {
+		t.Fatalf("BeforeSave() returned error: %v", err)
+	}
+
+	if !reflect.DeepEqual(logEntry.CycleFactorKeys, keys) {
+		t.Fatalf("cycle factor keys = %#v, want %#v", logEntry.CycleFactorKeys, keys)
 	}
 }
 

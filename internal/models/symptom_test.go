@@ -5,6 +5,50 @@ import (
 	"time"
 )
 
+func TestDefaultBuiltinSymptomsEntries(t *testing.T) {
+	t.Parallel()
+
+	symptoms := DefaultBuiltinSymptoms()
+	if len(symptoms) == 0 {
+		t.Fatal("DefaultBuiltinSymptoms() returned an empty slice")
+	}
+
+	cases := []struct {
+		name string
+		get  func(BuiltinSymptom) string
+	}{
+		{name: "Key", get: func(s BuiltinSymptom) string { return s.Key }},
+		{name: "Name", get: func(s BuiltinSymptom) string { return s.Name }},
+		{name: "TranslationKey", get: func(s BuiltinSymptom) string { return s.TranslationKey }},
+		{name: "Icon", get: func(s BuiltinSymptom) string { return s.Icon }},
+		{name: "Color", get: func(s BuiltinSymptom) string { return s.Color }},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name+" non-empty", func(t *testing.T) {
+			t.Parallel()
+
+			for _, symptom := range symptoms {
+				if testCase.get(symptom) == "" {
+					t.Errorf("built-in symptom %q has an empty %s", symptom.Key, testCase.name)
+				}
+			}
+		})
+	}
+
+	t.Run("keys unique", func(t *testing.T) {
+		t.Parallel()
+
+		seen := make(map[string]struct{}, len(symptoms))
+		for _, symptom := range symptoms {
+			if _, ok := seen[symptom.Key]; ok {
+				t.Errorf("duplicate built-in symptom key %q", symptom.Key)
+			}
+			seen[symptom.Key] = struct{}{}
+		}
+	})
+}
+
 func TestDefaultBuiltinSymptomsReturnsACopy(t *testing.T) {
 	t.Parallel()
 

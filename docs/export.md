@@ -158,6 +158,26 @@ Response `200`:
 - `skipped` — days that already existed and were left untouched.
 - `rejected` — malformed or duplicate day records dropped without writing.
 
+### CSV import
+
+`POST /api/v1/imports/csv` restores a prior CSV export. It is the inverse of `GET /api/v1/exports/csv` and accepts the file that endpoint downloads, with the same header row it writes.
+
+Request: `Content-Type: text/csv`, body = the raw export file. Requires the `owner` role, a valid auth session, and a CSRF token (`X-CSRF-Token` header or `csrf_token` form field) — like the JSON restore, it is state-mutating.
+
+The contract matches the JSON restore in every respect that matters:
+
+- **Additive**: a row creates its day only if the account does not already have that calendar day. Existing days are never overwritten or deleted, and re-importing the same file is idempotent. `added` / `skipped` / `rejected` mean exactly what they mean for JSON.
+- **Owner-scoped**: every write uses the session owner's id; the file cannot address another account.
+- **Server-side validation and normalization**: `Date` is parsed as `YYYY-MM-DD`; an invalid date, a duplicate date within the file, or an empty row is counted as `rejected` and written nowhere. Every other cell is re-read through the same normalization as the JSON restore. In particular:
+  - `Yes`/`No` (case-insensitive) becomes a boolean; any other value is `No`.
+  - Human-readable labels map back to their enums: `Flow` (`None`/`Spotting`/`Light`/`Medium`/`Heavy`), `Sex activity` (`None`/`Protected`/`Unprotected`), `Cervical mucus` (`None`/`Dry`/`Moist`/`Creamy`/`Egg white`), `Pregnancy test` (`None`/`Negative`/`Positive`). An unrecognized label becomes the neutral value (`None`).
+  - `BBT (C)` is parsed as a decimal Celsius reading; an empty or unparseable cell means "not measured", and a value outside the accepted range is treated the same way.
+  - `Cycle factors` and `Other` are split on `;` (the exporter joins with `; `). Cycle-factor labels map back to their keys (`Stress` → `stress`, `Sleep disruption` → `sleep_disruption`, and so on); unknown factors are dropped. Custom symptom names are matched or created exactly as in the JSON restore.
+  - `Notes` is length-capped, and the exporter's CSV-injection apostrophe is removed only when it precedes a formula-like prefix — so a file re-imported into the same account yields the notes it exported.
+- **Header validation**: the header must name every column the exporter writes, exactly once, and nothing else. Column order is free, and case plus surrounding whitespace are ignored (`date`, ` Date ` and `DATE` all name the same column); the names themselves are the documented export header. A missing, duplicated, or unknown column, a row with the wrong cell count, or invalid CSV quoting is refused with `400 invalid import file` before any row is written.
+
+The response is the same `{ "ok": true, "added": …, "skipped": …, "rejected": … }` shape as the JSON restore, and the size limits below apply unchanged (20 000 day rows; 16 MiB body, decompressed size included).
+
 ### Size limits
 
 Two independent caps bound a restore, and they surface as **two different 413 keys** — a client keying on the error string needs both:
@@ -171,7 +191,7 @@ The body limit is sized to the entry cap (20 000 day records serialize to roughl
 
 **Compressed requests (`Content-Encoding: gzip`/`deflate`/`br`/`zstd`) are bounded by the same 16 MiB, applied twice.** The raw bytes on the wire are capped regardless of encoding, so a compressed body that is itself over 16 MiB is refused while the request is read. A well-compressed body can stay under that on the wire and still expand past 16 MiB, so the cap is applied a second time to the **decompressed** stream, and a body that crosses it is refused there too. Either way the answer is the same `413 request_too_large` and the restore never starts: the import service is never handed a partial or substituted payload, so an oversized upload is never reported as a malformed file. Uncompressed requests only ever meet the first check — their wire size and parsed size are the same number.
 
-Error responses use stable, PII-free keys: `400 invalid import file` (not valid JSON), the two 413s above, and `500 failed to import data`.
+Error responses use stable, PII-free keys: `400 invalid import file` (not a valid export file of the endpoint's format), the two 413s above, and `500 failed to import data`.
 
 Importing from other trackers (e.g. Drip) is out of scope for this endpoint — see [issue #116](https://github.com/ovumcy/ovumcy-web/issues/116).
 

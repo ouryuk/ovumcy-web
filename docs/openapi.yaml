@@ -2160,9 +2160,56 @@ paths:
                 error_detail: { key: "import file too large", category: "validation", target: "global" }
         '429': { $ref: '#/components/responses/RateLimited' }
 
-  # =========================================================================
-  # users/current — whoami, settings, and account management
-  # =========================================================================
+  /api/v1/imports/csv:
+    post:
+      tags: [export]
+      summary: Restore a prior CSV export into the current account (owner only).
+      description: |
+        Additive restore of a prior `/api/v1/exports/csv` download: creates only
+        the days the account does not already have. Existing days are never
+        overwritten or deleted, so no re-authentication is required (unlike
+        clear-data). The header row must name exactly the documented export
+        columns (order, case and surrounding spacing are not significant); a
+        malformed header, bad CSV quoting or a row with the wrong cell count is
+        refused as `400 invalid import file`. Each Date is validated and every
+        other cell is re-normalized server-side against the same vocabulary as
+        the JSON restore; a row with an invalid or duplicate Date is dropped and
+        reported in `rejected`. State-mutating, so CSRF-protected. See
+        [docs/export.md](export.md).
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: { type: string }
+            example: |
+              Date,Period,Flow,Mood rating,Sex activity,BBT (C),Cervical mucus,Cramps,Headache,Acne,Mood,Bloating,Fatigue,Breast tenderness,Back pain,Nausea,Spotting,Irritability,Insomnia,Food cravings,Diarrhea,Constipation,Swelling,Cycle factors,Other,Notes,Pregnancy test,Cycle start,Uncertain
+              2026-05-17,Yes,Medium,3,Protected,36.70,Creamy,Yes,No,No,No,Yes,Yes,No,No,No,No,No,No,No,No,No,No,Stress; Travel,,felt tired,Negative,No,No
+      responses:
+        '200':
+          description: Restore summary.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413':
+          description: |
+            Two independent caps produce two different keys, mirroring the JSON
+            restore: `import file too large` / `validation` from the 20 000-row
+            cap, counted on a payload that already parsed; and
+            `request_too_large` / `too_large` from the 16 MiB body limit, which
+            the server enforces before the handler runs — on the wire body and,
+            for a compressed request, on its decompressed size. Branch on
+            `error_detail`, not on the status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+              example:
+                error: "import file too large"
+                error_detail: { key: "import file too large", category: "validation", target: "global" }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
   /api/v1/users/current:
     get:
       tags: [settings]

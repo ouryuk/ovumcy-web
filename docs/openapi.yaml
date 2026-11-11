@@ -964,6 +964,53 @@ components:
               - awaiting_first_cycle
       additionalProperties: false
 
+    CycleHistoryEntry:
+      type: object
+      description: |
+        One COMPLETED cycle from the owner's recorded history. The running
+        cycle is not included. `length` is the calendar-day span between this
+        start and the next observed start, the same interval the overview's
+        completed-cycle statistics use.
+
+        `ovulation_date` comes from one of two sources. `ovulation_confirmed`
+        means the owner's own BBT readings confirm a thermal shift inside this
+        cycle and the reported day is the shared detector's inferred ovulation
+        day — an inference from a recorded signal, never a measurement.
+        `ovulation_estimated` means no shift was found and the day is the
+        model's estimate from this cycle's length and the owner's luteal phase.
+        The flags are mutually exclusive and both false when `ovulation_date`
+        is null because the cycle is too short for either source to place one.
+      required:
+        - start_date
+        - end_date
+        - length
+        - ovulation_date
+        - ovulation_confirmed
+        - ovulation_estimated
+      properties:
+        start_date:
+          type: string
+          format: date
+          description: First day of the cycle (a recorded cycle start).
+        end_date:
+          type: string
+          format: date
+          description: Last day of the cycle, the day before the next observed start.
+        length:
+          type: integer
+          description: Calendar days from start_date to the next observed start. The next start is day one of the next cycle, so it is not included in end_date.
+        ovulation_date:
+          type: [string, "null"]
+          format: date
+          description: Confirmed or estimated ovulation day; null when neither source can place one.
+        ovulation_confirmed:
+          type: boolean
+          description: ovulation_date is inferred from the owner's recorded BBT shift. Always false when ovulation_date is null.
+        ovulation_estimated:
+          type: boolean
+          description: ovulation_date is the length-based model estimate. Always false when ovulation_date is null.
+      additionalProperties: false
+
     ExportJSONEntry:
       type: object
       description: One day in a JSON export. See [docs/export.md](export.md) for the per-field stability contract.
@@ -2046,6 +2093,35 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/StatsOverview' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/stats/cycles:
+    get:
+      tags: [stats]
+      summary: Individual completed cycles for the signed-in user.
+      description: |
+        One entry per completed cycle, oldest first. The running cycle is not
+        included because it has no end or length yet. Each entry is derived
+        from the same recorded logs as `/api/v1/stats/overview`: the observed
+        cycle starts and their calendar-day lengths come from the shared cycle
+        detection, so an entry's `length` is the interval between two recorded
+        starts. An owner with no completed cycles receives `[]`, not an error.
+
+        `ovulation_date` is either inferred from the owner's recorded BBT shift
+        (`ovulation_confirmed: true`) or estimated from the recorded cycle
+        length and the owner's luteal phase (`ovulation_estimated: true`). The
+        two flags are mutually exclusive and both false when the date is null
+        because the cycle is too short for either source to place one.
+      responses:
+        '200':
+          description: Cycle history payload, oldest cycle first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CycleHistoryEntry' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '429': { $ref: '#/components/responses/RateLimited' }

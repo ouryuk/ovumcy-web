@@ -60,6 +60,7 @@ var positiveTrackingColumnAllowedFiles = map[string]string{
 	filepath.Join("internal", "services", "tracking_visibility.go"):                "the single reader that turns the columns into day-form visibility",
 	filepath.Join("internal", "services", "calendar_days.go"):                      "asks whether a temperature series exists at all, not whether a day form shows the field",
 	filepath.Join("internal", "services", "cycle_signals.go"):                      "the same question, for the cycle signal derived from that series",
+	filepath.Join("internal", "services", "cycle_history.go"):                      "asks whether a temperature series exists to confirm a completed cycle's ovulation, not whether a day form shows the field",
 	filepath.Join("internal", "api", "input_types.go"):                             "the published v1 JSON request body",
 	filepath.Join("internal", "api", "handlers_settings_tracking.go"):              "binds and echoes the published v1 JSON keys",
 	filepath.Join("internal", "api", "settings_view_helpers.go"):                   "hands the settings toggles to their template",

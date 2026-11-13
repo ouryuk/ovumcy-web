@@ -58,6 +58,16 @@ type onboardingTestAppOptions struct {
 	// "this instance sends no reminders" -- correct, and the reason the egress
 	// matrix has to be able to turn it on to reach the states behind it.
 	outboundDeliveryEnabled bool
+	// totpService replaces the TOTP service the composition root builds, for
+	// the regressions that need one of its storage calls to fail. It is a
+	// factory rather than a value because the database is created inside the
+	// app helper, and a fault-injecting repository has to wrap the real one
+	// to stay a TOTP service in every other respect.
+	totpService func(database *gorm.DB) *services.TOTPService
+	// oidcLogoutStateService replaces the provider-logout-state service the
+	// composition root builds, for the regressions that need one of its
+	// storage calls to fail.
+	oidcLogoutStateService func(database *gorm.DB) *services.OIDCLogoutStateService
 }
 
 func newOnboardingTestAppWithOptions(t *testing.T, options onboardingTestAppOptions) (*fiber.App, *gorm.DB) {
@@ -149,6 +159,12 @@ func newTestHandlerDependencies(database *gorm.DB, i18nManager *i18n.Manager, op
 	})
 	if appOptions.dayService != nil {
 		dependencies.DayService = appOptions.dayService(database)
+	}
+	if appOptions.totpService != nil {
+		dependencies.TOTPService = appOptions.totpService(database)
+	}
+	if appOptions.oidcLogoutStateService != nil {
+		dependencies.OIDCLogoutStateSvc = appOptions.oidcLogoutStateService(database)
 	}
 	return dependencies
 }

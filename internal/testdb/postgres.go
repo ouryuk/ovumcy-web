@@ -55,15 +55,25 @@ func StartPostgres(t *testing.T, databaseName string) (dsn string, containerID s
 
 	ensurePostgresImageAvailable(t)
 
-	containerID = runDockerCommand(t, "run", "-d", "--rm", "-P",
+	// A killed test process cannot run t.Cleanup, so Docker's --rm alone may
+	// leave an orphaned Postgres container behind. Reclaim only containers
+	// whose recorded owner is demonstrably gone; never touch a live owner.
+	cleanupStalePostgresContainers(t)
+
+	runArgs := []string{"run", "-d", "--rm", "-P"}
+	runArgs = append(runArgs, postgresContainerLabels(databaseName)...)
+	runArgs = append(runArgs,
 		"-e", "POSTGRES_USER="+postgresTestUser,
 		"-e", "POSTGRES_PASSWORD="+postgresTestPassword,
 		"-e", "POSTGRES_DB="+databaseName,
 		postgresTestImage,
 	)
+	containerID = runDockerCommand(t, runArgs...)
 
 	t.Cleanup(func() {
-		_ = runDockerCommandAllowFailure("rm", "-f", containerID)
+		// -v removes the anonymous data volume as well as the container.
+		// Without it, every successful test run leaks one PostgreSQL volume.
+		_ = runDockerCommandAllowFailure("rm", "-f", "-v", containerID)
 	})
 
 	waitForPostgresReadiness(t, containerID, databaseName)

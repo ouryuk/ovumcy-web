@@ -21,6 +21,7 @@ func tryRunCLICommand() (bool, error) {
 		runWebhook:          cli.RunWebhookCommand,          // codecov:ignore -- main() composition-root wiring; this os.Args dispatch wrapper runs only in the binary (the handler is unit-tested via tryRunCLICommandWithHandlers with a stub)
 		runRepair:           cli.RunRepairCommand,           // codecov:ignore -- main() composition-root wiring; this os.Args dispatch wrapper runs only in the binary (the handler is unit-tested via tryRunCLICommandWithHandlers with a stub)
 		runLinkOIDCIdentity: cli.RunLinkOIDCIdentityCommand, // codecov:ignore -- main() composition-root wiring; this os.Args dispatch wrapper runs only in the binary (the handler is unit-tested via tryRunCLICommandWithHandlers with a stub)
+		runExport:           cli.RunExportCommand,
 	})
 }
 
@@ -33,6 +34,7 @@ type cliCommandHandlers struct {
 	runWebhook          func(databaseConfig db.Config, secretKey string, args []string) error
 	runRepair           func(databaseConfig db.Config, args []string) error
 	runLinkOIDCIdentity func(databaseConfig db.Config, oidcConfig security.OIDCConfig, args []string) error
+	runExport           func(databaseConfig db.Config, args []string) error
 }
 
 func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (bool, error) {
@@ -57,6 +59,8 @@ func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (b
 		return handleRepairCommand(args, handlers)
 	case "link-oidc-identity":
 		return handleLinkOIDCIdentityCommand(args, handlers)
+	case "export":
+		return handleExportCommand(args, handlers)
 	default:
 		return false, nil
 	}
@@ -182,6 +186,23 @@ func handleLinkOIDCIdentityCommand(args []string, handlers cliCommandHandlers) (
 		return true, fmt.Errorf("invalid OIDC config: %w", err)
 	}
 	return true, handlers.runLinkOIDCIdentity(databaseConfig, oidcConfig, args[1:])
+}
+
+// handleExportCommand dispatches `ovumcy export`: a read-only, no-secret data
+// exit for one owner's records. Like `users`, it needs only the database
+// config — the payload is the owner's health data, not any stored secret.
+func handleExportCommand(args []string, handlers cliCommandHandlers) (bool, error) {
+	if len(args) < 2 {
+		return true, fmt.Errorf("usage: ovumcy export <email> [--id <id>] [--out <path>]")
+	}
+	if handlers.runExport == nil {
+		return true, fmt.Errorf("export handler is required")
+	}
+	databaseConfig, err := resolveDatabaseConfig()
+	if err != nil {
+		return true, fmt.Errorf("invalid database config: %w", err)
+	}
+	return true, handlers.runExport(databaseConfig, args[1:])
 }
 
 func handleWebhookCommand(args []string, handlers cliCommandHandlers) (bool, error) {

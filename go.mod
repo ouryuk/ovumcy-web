@@ -27,13 +27,13 @@ require (
 	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.8 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.9 // indirect
 	github.com/gofiber/schema v1.8.3 // indirect
 	github.com/gofiber/utils/v2 v2.4.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/puddle/v2 v2.2.3 // indirect
+	github.com/jackc/puddle/v2 v2.2.4 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/klauspost/compress v1.19.2 // indirect
@@ -43,7 +43,7 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/philhofer/fwd v1.2.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/shamaton/msgpack/v3 v3.2.6 // indirect
+	github.com/shamaton/msgpack/v3 v3.2.8 // indirect
 	github.com/tinylib/msgp v1.6.5 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	golang.org/x/mod v0.40.0 // indirect

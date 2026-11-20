@@ -280,6 +280,97 @@ func TestRunSummaryCommandArgumentErrorsUseStableUsage(t *testing.T) {
 	}
 }
 
+func TestRunSummaryCommandNinetyDayWindowWithEqualsFlagForm(t *testing.T) {
+	t.Parallel()
+
+	databasePath := createCLIUsersDatabase(t)
+	seedSummaryFixture(t, databasePath)
+
+	// The `--flag=value` form must be accepted alongside `--flag value`, and
+	// the 90-day window is pure calendar math off the pinned clock: 90 days
+	// ending 2026-03-07 starts 2025-12-08. All six seeded logs fall inside,
+	// so every metric is the all-window figure.
+	document, _ := runSummaryForOwner(t, databasePath, []string{"--days=90", "--json", "summary-owner@example.com"})
+	if document.WindowDays != 90 || document.CalendarDays != 90 {
+		t.Fatalf("unexpected window: %+v", document)
+	}
+	if document.From != "2025-12-08" || document.To != "2026-03-07" {
+		t.Fatalf("unexpected 90-day bounds: %s .. %s", document.From, document.To)
+	}
+	if document.LoggedDays != 5 {
+		t.Fatalf("expected 5 logged days in the 90-day window, got %d", document.LoggedDays)
+	}
+	if document.AdherencePercent < 5.5 || document.AdherencePercent > 5.6 {
+		t.Fatalf("expected adherence ~5.6%%, got %f", document.AdherencePercent)
+	}
+	// 2026-03-08 stays outside the window, so the streak is the Mar 1–5 run.
+	if document.LongestStreak != 5 {
+		t.Fatalf("expected longest streak 5, got %d", document.LongestStreak)
+	}
+	if document.BestDay == nil || document.BestDay.Date != "2026-03-01" || document.WorstDay == nil || document.WorstDay.Date != "2026-03-04" {
+		t.Fatalf("unexpected mood days: %+v / %+v", document.BestDay, document.WorstDay)
+	}
+}
+
+func TestRunSummaryCommandArgumentErrorsExtended(t *testing.T) {
+	t.Parallel()
+
+	databasePath := createCLIUsersDatabase(t)
+	pinSummaryClock(t)
+	config := db.Config{Driver: db.DriverSQLite, SQLitePath: databasePath}
+
+	for _, args := range [][]string{
+		{"--days"},       // value form with nothing after it
+		{"--days", "0"},  // outside the accepted windows
+		{"--days", "-7"}, // negative window
+		{"--days=90x"},   // equals form, non-numeric
+		{"--id", "0"},    // id 0 means "not given" → no target at all
+		{"--id=abc"},     // equals form, non-numeric
+	} {
+		var output bytes.Buffer
+		err := runSummaryCommand(config, args, &output)
+		if err == nil || !strings.Contains(err.Error(), "usage: ovumcy summary") {
+			t.Fatalf("expected usage error for %v, got %v", args, err)
+		}
+	}
+
+	// A display-name address is refused up front, before any database work.
+	var output bytes.Buffer
+	err := runSummaryCommand(config, []string{"Owner <a@example.com>"}, &output)
+	if err == nil || !strings.Contains(err.Error(), "invalid email address") {
+		t.Fatalf("expected invalid-email error, got %v", err)
+	}
+}
+
+func TestRunSummaryCommandJSONShapePinsContractKeys(t *testing.T) {
+	t.Parallel()
+
+	databasePath := createCLIUsersDatabase(t)
+	createCLIUsersUser(t, databasePath, "empty@example.com", "Empty", models.RoleOwner, false, time.Date(2026, time.March, 2, 9, 0, 0, 0, time.UTC))
+
+	pinSummaryClock(t)
+	var output bytes.Buffer
+	err := runSummaryCommand(db.Config{Driver: db.DriverSQLite, SQLitePath: databasePath}, []string{"empty@example.com", "--json"}, &output)
+	if err != nil {
+		t.Fatalf("runSummaryCommand returned error: %v", err)
+	}
+	rendered := output.String()
+	for _, fragment := range []string{
+		"\"schema\": \"ovumcy-summary/v1\"",
+		"\"generated_at\": \"",
+		"\"window_days\": 30",
+		"\"symptom_counts\": []",
+		"\"top_symptoms\": []",
+		"\"best_day\": null",
+		"\"worst_day\": null",
+		"\"longest_streak\": 0",
+	} {
+		if !strings.Contains(rendered, fragment) {
+			t.Fatalf("JSON payload missing %q:\n%s", fragment, rendered)
+		}
+	}
+}
+
 func TestRunSummaryCommandUnknownUserReturnsAdvice(t *testing.T) {
 	t.Parallel()
 

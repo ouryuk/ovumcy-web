@@ -22,6 +22,7 @@ func tryRunCLICommand() (bool, error) {
 		runRepair:           cli.RunRepairCommand,           // codecov:ignore -- main() composition-root wiring; this os.Args dispatch wrapper runs only in the binary (the handler is unit-tested via tryRunCLICommandWithHandlers with a stub)
 		runLinkOIDCIdentity: cli.RunLinkOIDCIdentityCommand, // codecov:ignore -- main() composition-root wiring; this os.Args dispatch wrapper runs only in the binary (the handler is unit-tested via tryRunCLICommandWithHandlers with a stub)
 		runExport:           cli.RunExportCommand,
+		runSummary:          cli.RunSummaryCommand,
 	})
 }
 
@@ -35,6 +36,7 @@ type cliCommandHandlers struct {
 	runRepair           func(databaseConfig db.Config, args []string) error
 	runLinkOIDCIdentity func(databaseConfig db.Config, oidcConfig security.OIDCConfig, args []string) error
 	runExport           func(databaseConfig db.Config, args []string) error
+	runSummary          func(databaseConfig db.Config, args []string) error
 }
 
 func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (bool, error) {
@@ -61,6 +63,8 @@ func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (b
 		return handleLinkOIDCIdentityCommand(args, handlers)
 	case "export":
 		return handleExportCommand(args, handlers)
+	case "summary":
+		return handleSummaryCommand(args, handlers)
 	default:
 		return false, nil
 	}
@@ -203,6 +207,24 @@ func handleExportCommand(args []string, handlers cliCommandHandlers) (bool, erro
 		return true, fmt.Errorf("invalid database config: %w", err)
 	}
 	return true, handlers.runExport(databaseConfig, args[1:])
+}
+
+// handleSummaryCommand dispatches `ovumcy summary`: a read-only, no-secret
+// aggregation of one owner's daily logs over a 7/30/90-day window. Like
+// `export`, it needs only the database config — nothing is written and no
+// stored secret is read.
+func handleSummaryCommand(args []string, handlers cliCommandHandlers) (bool, error) {
+	if len(args) < 2 {
+		return true, fmt.Errorf("usage: ovumcy summary <email> [--id <id>] [--days 7|30|90] [--json]")
+	}
+	if handlers.runSummary == nil {
+		return true, fmt.Errorf("summary handler is required")
+	}
+	databaseConfig, err := resolveDatabaseConfig()
+	if err != nil {
+		return true, fmt.Errorf("invalid database config: %w", err)
+	}
+	return true, handlers.runSummary(databaseConfig, args[1:])
 }
 
 func handleWebhookCommand(args []string, handlers cliCommandHandlers) (bool, error) {

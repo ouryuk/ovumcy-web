@@ -144,7 +144,15 @@ func (service *StatsService) BuildPhaseMoodInsights(user *models.User, logs []mo
 	if len(cycles) < minimumPhaseInsightCycles {
 		return nil, false
 	}
+	return buildPhaseMoodInsightsFromCycles(logs, cycles, location)
+}
 
+// buildPhaseMoodInsightsFromCycles is the mood half of the phase analytics,
+// split out of BuildPhaseMoodInsights so a surface that does not gate on the
+// minimum-cycle threshold the same way (the `ovumcy trends` CLI reports the
+// completed-cycle count alongside whatever it could measure) still computes
+// averages with the same rules: mood 1–5, completed cycles only.
+func buildPhaseMoodInsightsFromCycles(logs []models.DailyLog, cycles []completedCyclePhaseContext, location *time.Location) ([]StatsPhaseMoodInsight, bool) {
 	type phaseTotals struct {
 		total int
 		count int

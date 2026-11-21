@@ -23,6 +23,7 @@ func tryRunCLICommand() (bool, error) {
 		runLinkOIDCIdentity: cli.RunLinkOIDCIdentityCommand, // codecov:ignore -- main() composition-root wiring; this os.Args dispatch wrapper runs only in the binary (the handler is unit-tested via tryRunCLICommandWithHandlers with a stub)
 		runExport:           cli.RunExportCommand,
 		runSummary:          cli.RunSummaryCommand,
+		runTrends:           cli.RunTrendsCommand,
 	})
 }
 
@@ -37,6 +38,7 @@ type cliCommandHandlers struct {
 	runLinkOIDCIdentity func(databaseConfig db.Config, oidcConfig security.OIDCConfig, args []string) error
 	runExport           func(databaseConfig db.Config, args []string) error
 	runSummary          func(databaseConfig db.Config, args []string) error
+	runTrends           func(databaseConfig db.Config, args []string) error
 }
 
 func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (bool, error) {
@@ -65,6 +67,8 @@ func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (b
 		return handleExportCommand(args, handlers)
 	case "summary":
 		return handleSummaryCommand(args, handlers)
+	case "trends":
+		return handleTrendsCommand(args, handlers)
 	default:
 		return false, nil
 	}
@@ -225,6 +229,24 @@ func handleSummaryCommand(args []string, handlers cliCommandHandlers) (bool, err
 		return true, fmt.Errorf("invalid database config: %w", err)
 	}
 	return true, handlers.runSummary(databaseConfig, args[1:])
+}
+
+// handleTrendsCommand dispatches `ovumcy trends`: a read-only, no-secret
+// correlation of one owner's symptoms and moods with the four cycle phases.
+// Like `summary`, it needs only the database config — nothing is written and
+// no stored secret is read.
+func handleTrendsCommand(args []string, handlers cliCommandHandlers) (bool, error) {
+	if len(args) < 2 {
+		return true, fmt.Errorf("usage: ovumcy trends <email> [--id <id>] [--tz <IANA name>] [--json]")
+	}
+	if handlers.runTrends == nil {
+		return true, fmt.Errorf("trends handler is required")
+	}
+	databaseConfig, err := resolveDatabaseConfig()
+	if err != nil {
+		return true, fmt.Errorf("invalid database config: %w", err)
+	}
+	return true, handlers.runTrends(databaseConfig, args[1:])
 }
 
 func handleWebhookCommand(args []string, handlers cliCommandHandlers) (bool, error) {

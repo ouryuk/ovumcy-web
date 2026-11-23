@@ -280,3 +280,83 @@ func TestRunTrendsCommandWithoutCompletedCycles(t *testing.T) {
 		t.Fatalf("table missing the no-cycles note:\n%s", table.String())
 	}
 }
+
+// seedTrendsBelowPatternFixture seeds one owner with TWO completed cycles
+// (three explicit cycle starts) so the account sits BELOW the stats page's
+// pattern minimum of three completed cycles.
+//
+// The `ovumcy trends` document reports the completed-cycle count beside
+// whatever it could measure, so both halves of the document have to be
+// counted over the cycles the owner has. The mood half always was; the
+// symptom half kept the stats page's minimum and was withheld, which reads
+// as "there were no symptoms in that phase" — a fact the owner knows to be
+// false — rather than "there were too few cycles to count them".
+func seedTrendsBelowPatternFixture(t *testing.T, databasePath string) models.User {
+	t.Helper()
+
+	user := createCLIUsersUser(t, databasePath, "trends-below@example.com", "Trends Below", models.RoleOwner, true, time.Date(2026, time.January, 1, 8, 0, 0, 0, time.UTC))
+
+	database, err := db.OpenDatabase(db.Config{Driver: db.DriverSQLite, SQLitePath: databasePath})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	sqlDB, err := database.DB()
+	if err != nil {
+		t.Fatalf("open sql db: %v", err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+
+	cramps := models.SymptomType{UserID: user.ID, Name: "Cramps", Icon: "🩸", Color: "#FF4444"}
+	if err := database.Create(&cramps).Error; err != nil {
+		t.Fatalf("create cramps symptom: %v", err)
+	}
+
+	// Three starts → two completed cycles; the third never finishes.
+	for _, start := range []time.Time{
+		time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, time.January, 29, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, time.February, 26, 0, 0, 0, 0, time.UTC),
+	} {
+		for periodDay := 0; periodDay < 5; periodDay++ {
+			logEntry := models.DailyLog{
+				UserID:     user.ID,
+				Date:       start.AddDate(0, 0, periodDay),
+				IsPeriod:   true,
+				CycleStart: periodDay == 0,
+			}
+			if periodDay == 1 {
+				logEntry.Mood = 3
+				logEntry.SymptomIDs = []uint{cramps.ID}
+			}
+			if err := database.Create(&logEntry).Error; err != nil {
+				t.Fatalf("create period log %v: %v", logEntry.Date, err)
+			}
+		}
+	}
+	return user
+}
+
+// TestRunTrendsCommandReportsSymptomsBelowThePatternMinimum is the
+// operator-visible half of the regression: the document an operator reads for
+// a two-cycle account must carry the symptoms it can count, exactly as it
+// carries the moods it can count.
+func TestRunTrendsCommandReportsSymptomsBelowThePatternMinimum(t *testing.T) {
+	databasePath := createCLIUsersDatabase(t)
+	seedTrendsBelowPatternFixture(t, databasePath)
+
+	document, _ := runTrendsForOwner(t, databasePath, []string{"trends-below@example.com", "--json"})
+	if document.CompletedCycles != 2 {
+		t.Fatalf("expected 2 completed cycles, got %d", document.CompletedCycles)
+	}
+
+	menstrual := trendsPhaseByName(t, document, "menstrual")
+	if !menstrual.HasMood || menstrual.MoodEntries != 2 {
+		t.Fatalf("expected the mood half to be reported below the pattern minimum, got %+v", menstrual)
+	}
+	if !menstrual.HasSymptoms {
+		t.Fatal("expected the symptom half to be reported below the pattern minimum: the document reported moods for the same cycles it withheld symptoms for, which reads as 'no symptoms in that phase' rather than 'too few cycles to count them'")
+	}
+	if len(menstrual.Symptoms) != 1 || menstrual.Symptoms[0].Name != "Cramps" || menstrual.Symptoms[0].Count != 2 {
+		t.Fatalf("unexpected menstrual symptoms: %+v", menstrual.Symptoms)
+	}
+}

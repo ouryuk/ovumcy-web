@@ -14,6 +14,13 @@ import (
 // cycle count when it is below the pattern threshold — an operator reading
 // a trends document wants to see "2 completed cycles, no pattern claimed"
 // rather than an empty answer.
+//
+// "No pattern claimed" is the whole claim, and it applies to BOTH halves of
+// the document: the symptoms and the moods are counted over whichever
+// completed cycles the owner has, so one of the two being reported while the
+// other is withheld would read as "there were no symptoms in that phase" —
+// a fact the owner knows to be false — instead of "there were too few cycles
+// to count them".
 type CyclePhaseTrends struct {
 	Timezone        string
 	CompletedCycles int
@@ -46,7 +53,7 @@ func BuildCyclePhaseTrends(timezone string, logs []models.DailyLog, symptoms []m
 		return trends
 	}
 
-	symptomInsights, hasSymptomData := buildPhaseSymptomInsightsWithMap(logs, location, symptomByID)
+	symptomInsights, hasSymptomData := buildPhaseSymptomInsightsFromCycles(logs, contexts, location, symptomByID)
 	trends.SymptomInsights = symptomInsights
 	trends.HasSymptomData = hasSymptomData
 

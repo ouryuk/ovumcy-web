@@ -200,9 +200,37 @@ func buildPhaseMoodInsightsFromCycles(logs []models.DailyLog, cycles []completed
 	return insights, hasData
 }
 
+// buildPhaseSymptomInsightsWithMap is the symptom half of the phase analytics
+// as the STATS PAGE reads it: gated on the pattern minimum, because that page
+// claims a pattern and must have the cycles behind it.
+//
+// The gate lives here, in the surface wrapper, and NOT in the counting itself:
+// buildPhaseSymptomInsightsFromCycles counts over whatever completed cycles it
+// is handed. A surface that reports the cycle count beside what it could
+// measure — the `ovumcy trends` CLI — therefore counts below the pattern
+// minimum while this one does not, and the two agree from the minimum upward
+// because they share the counting.
+//
+// Regression: TestBuildCyclePhaseTrendsReportsSymptomsBelowThePatternMinimum.
 func buildPhaseSymptomInsightsWithMap(logs []models.DailyLog, location *time.Location, symptomByID map[uint]models.SymptomType) ([]StatsPhaseSymptomInsight, bool) {
 	cycles := buildCompletedCyclePhaseContexts(logs, location)
 	if len(cycles) < minimumPhaseInsightCycles || len(symptomByID) == 0 {
+		return nil, false
+	}
+
+	return buildPhaseSymptomInsightsFromCycles(logs, cycles, location, symptomByID)
+}
+
+// buildPhaseSymptomInsightsFromCycles is the symptom half's counting, split
+// out of buildPhaseSymptomInsightsWithMap for the same reason
+// buildPhaseMoodInsightsFromCycles was split out of BuildPhaseMoodInsights:
+// the `ovumcy trends` CLI reports the completed-cycle count alongside whatever
+// it could measure, so it must not withhold the symptoms the owner can
+// already see simply because the account has fewer than three completed
+// cycles. Keeping the gate on the stats page's wrapper and the counting
+// shared is what makes the two halves of one document agree.
+func buildPhaseSymptomInsightsFromCycles(logs []models.DailyLog, cycles []completedCyclePhaseContext, location *time.Location, symptomByID map[uint]models.SymptomType) ([]StatsPhaseSymptomInsight, bool) {
+	if len(symptomByID) == 0 {
 		return nil, false
 	}
 

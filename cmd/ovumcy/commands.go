@@ -24,6 +24,7 @@ func tryRunCLICommand() (bool, error) {
 		runExport:           cli.RunExportCommand,
 		runSummary:          cli.RunSummaryCommand,
 		runTrends:           cli.RunTrendsCommand,
+		runPredict:          cli.RunPredictCommand,
 	})
 }
 
@@ -39,6 +40,7 @@ type cliCommandHandlers struct {
 	runExport           func(databaseConfig db.Config, args []string) error
 	runSummary          func(databaseConfig db.Config, args []string) error
 	runTrends           func(databaseConfig db.Config, args []string) error
+	runPredict          func(databaseConfig db.Config, args []string) error
 }
 
 func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (bool, error) {
@@ -69,6 +71,8 @@ func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (b
 		return handleSummaryCommand(args, handlers)
 	case "trends":
 		return handleTrendsCommand(args, handlers)
+	case "predict":
+		return handlePredictCommand(args, handlers)
 	default:
 		return false, nil
 	}
@@ -247,6 +251,25 @@ func handleTrendsCommand(args []string, handlers cliCommandHandlers) (bool, erro
 		return true, fmt.Errorf("invalid database config: %w", err)
 	}
 	return true, handlers.runTrends(databaseConfig, args[1:])
+}
+
+// handlePredictCommand dispatches `ovumcy predict`: a read-only, no-secret
+// projection of one owner's next cycle window — next period start, ovulation
+// date and fertile range — through the same derivation the dashboard uses.
+// Like `summary`, it needs only the database config — nothing is written and
+// no stored secret is read.
+func handlePredictCommand(args []string, handlers cliCommandHandlers) (bool, error) {
+	if len(args) < 2 {
+		return true, fmt.Errorf("usage: ovumcy predict <email> [--id <id>] [--tz <IANA name>] [--json]")
+	}
+	if handlers.runPredict == nil {
+		return true, fmt.Errorf("predict handler is required")
+	}
+	databaseConfig, err := resolveDatabaseConfig()
+	if err != nil {
+		return true, fmt.Errorf("invalid database config: %w", err)
+	}
+	return true, handlers.runPredict(databaseConfig, args[1:])
 }
 
 func handleWebhookCommand(args []string, handlers cliCommandHandlers) (bool, error) {

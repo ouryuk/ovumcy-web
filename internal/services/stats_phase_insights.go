@@ -206,6 +206,31 @@ func buildPhaseSymptomInsightsWithMap(logs []models.DailyLog, location *time.Loc
 		return nil, false
 	}
 
+	return buildPhaseSymptomInsightsFromCycles(logs, cycles, location, symptomByID)
+}
+
+// buildPhaseSymptomInsightsFromCycles is the symptom half of the phase
+// analytics with NO sample-size gate, split out of buildPhaseSymptomInsightsWithMap
+// so a surface that does not claim a PATTERN (the `ovumcy trends` CLI reports
+// the completed-cycle count beside whatever it could measure) still counts
+// occurrences with the same rules: completed cycles only, known symptom ids
+// only.
+//
+// It is the symptom twin of buildPhaseMoodInsightsFromCycles, and the two MUST
+// be used together or not at all: they are the two halves of one phase
+// breakdown, and a surface that gated one half and not the other reported
+// moods for a phase it refused to report symptoms for — the same "half the
+// substitution" split the confirmed-cycle stats already carry a fix for.
+//
+// cycles is passed in rather than rebuilt so the caller pays for the completed
+// cycle contexts ONCE and both halves read the same list: two calls to
+// buildCompletedCyclePhaseContexts can only disagree if the detector changes
+// between them.
+func buildPhaseSymptomInsightsFromCycles(logs []models.DailyLog, cycles []completedCyclePhaseContext, location *time.Location, symptomByID map[uint]models.SymptomType) ([]StatsPhaseSymptomInsight, bool) {
+	if len(symptomByID) == 0 {
+		return nil, false
+	}
+
 	counters := buildPhaseSymptomCounters(logs, cycles, location, symptomByID)
 	return buildPhaseSymptomInsightResults(counters, symptomByID), hasPhaseSymptomInsightData(counters)
 }

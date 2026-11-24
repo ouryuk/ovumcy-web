@@ -12,8 +12,9 @@ import (
 // ovulation / luteal), computed from the same completed-cycle phase
 // contexts the stats page uses. Unlike the stats page it does not hide the
 // cycle count when it is below the pattern threshold — an operator reading
-// a trends document wants to see "2 completed cycles, no pattern claimed"
-// rather than an empty answer.
+// a trends document wants to see "2 completed cycles, and here is what those
+// two cycles recorded" rather than an empty answer — so NEITHER half of the
+// breakdown is gated by that threshold.
 type CyclePhaseTrends struct {
 	Timezone        string
 	CompletedCycles int
@@ -27,6 +28,15 @@ type CyclePhaseTrends struct {
 // log history. It is pure: everything it needs arrives as arguments, so the
 // CLI can call it with what its repositories already serve — no schema
 // change, no write, no secret.
+//
+// The two halves of the breakdown MUST move together. Gating the symptom half
+// alone — which is what the pattern minimum did here, through
+// buildPhaseSymptomInsightsWithMap — produced a document that reported a
+// phase's average mood while refusing to report the symptoms logged on the
+// very same days, and the operator reading it could not tell an empty phase
+// from a withheld one. So both halves are computed from the SAME completed
+// cycle contexts, under the same rules, with no sample-size gate: a phase
+// with nothing in it is reported as empty rather than withheld.
 func BuildCyclePhaseTrends(timezone string, logs []models.DailyLog, symptoms []models.SymptomType) CyclePhaseTrends {
 	location := resolveOwnerLocation(timezone, time.UTC)
 
@@ -46,7 +56,7 @@ func BuildCyclePhaseTrends(timezone string, logs []models.DailyLog, symptoms []m
 		return trends
 	}
 
-	symptomInsights, hasSymptomData := buildPhaseSymptomInsightsWithMap(logs, location, symptomByID)
+	symptomInsights, hasSymptomData := buildPhaseSymptomInsightsFromCycles(logs, contexts, location, symptomByID)
 	trends.SymptomInsights = symptomInsights
 	trends.HasSymptomData = hasSymptomData
 

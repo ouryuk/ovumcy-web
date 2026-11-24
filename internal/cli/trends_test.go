@@ -280,3 +280,107 @@ func TestRunTrendsCommandWithoutCompletedCycles(t *testing.T) {
 		t.Fatalf("table missing the no-cycles note:\n%s", table.String())
 	}
 }
+
+// seedTrendsShortHistoryFixture seeds one owner with THREE cycle starts —
+// two completed cycles, one BELOW the pattern minimum of three — so the trends
+// document has something to say while still being under the sample size the
+// stats page would withhold a pattern at.
+//
+// Per cycle: five period days (a mood on each, and the Cramps symptom on the
+// second one) and one day-10 mood. The symptom lands on a period day, so the
+// menstrual phase carries both halves of the breakdown.
+func seedTrendsShortHistoryFixture(t *testing.T, databasePath string) models.User {
+	t.Helper()
+
+	user := createCLIUsersUser(t, databasePath, "short-owner@example.com", "Short Owner", models.RoleOwner, true, time.Date(2026, time.January, 1, 8, 0, 0, 0, time.UTC))
+
+	database, err := db.OpenDatabase(db.Config{Driver: db.DriverSQLite, SQLitePath: databasePath})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	sqlDB, err := database.DB()
+	if err != nil {
+		t.Fatalf("open sql db: %v", err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+
+	cramps := models.SymptomType{UserID: user.ID, Name: "Cramps", Icon: "c"}
+	if err := database.Create(&cramps).Error; err != nil {
+		t.Fatalf("create cramps symptom: %v", err)
+	}
+
+	for _, start := range []time.Time{
+		time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, time.January, 29, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, time.February, 26, 0, 0, 0, 0, time.UTC),
+	} {
+		for periodDay := range 5 {
+			logEntry := models.DailyLog{
+				UserID:     user.ID,
+				Date:       start.AddDate(0, 0, periodDay),
+				IsPeriod:   true,
+				CycleStart: periodDay == 0,
+				Flow:       models.FlowLight,
+				Mood:       3,
+			}
+			if periodDay == 1 {
+				logEntry.SymptomIDs = []uint{cramps.ID}
+			}
+			if err := database.Create(&logEntry).Error; err != nil {
+				t.Fatalf("create period log %v: %v", logEntry.Date, err)
+			}
+		}
+	}
+	return user
+}
+
+// TestRunTrendsCommandReportsSymptomsAndMoodBelowThePatternMinimum is the
+// operator-visible half of the fix: with TWO completed cycles the document
+// must report the symptoms AND the mood of the phase they share.
+//
+// The symptom half used to be withheld below the pattern minimum while the
+// mood half was reported, so the document claimed an average mood for a phase
+// it refused to report symptoms for — and the operator could not tell an
+// empty phase from a withheld one.
+func TestRunTrendsCommandReportsSymptomsAndMoodBelowThePatternMinimum(t *testing.T) {
+	databasePath := createCLIUsersDatabase(t)
+	user := seedTrendsShortHistoryFixture(t, databasePath)
+
+	document, rendered := runTrendsForOwner(t, databasePath, []string{"short-owner@example.com", "--json"})
+	if document.User.ID != user.ID {
+		t.Fatalf("unexpected user: %+v", document.User)
+	}
+	if document.CompletedCycles != 2 {
+		t.Fatalf("expected 2 completed cycles, got %d", document.CompletedCycles)
+	}
+
+	menstrual := trendsPhaseByName(t, document, "menstrual")
+	if !menstrual.HasSymptoms {
+		t.Fatal("the symptoms were withheld below the pattern minimum while the mood was reported: the two halves of the breakdown must move together")
+	}
+	if !menstrual.HasMood {
+		t.Fatal("expected the mood half to report below the pattern minimum: the trends surface does not gate on it")
+	}
+	if len(menstrual.Symptoms) != 1 || menstrual.Symptoms[0].Name != "Cramps" {
+		t.Fatalf("unexpected menstrual symptoms: %+v", menstrual.Symptoms)
+	}
+	// One Cramps occurrence per completed cycle, over every logged menstrual
+	// day (five per cycle).
+	if menstrual.Symptoms[0].Count != 2 {
+		t.Fatalf("expected cramps twice across two cycles, got %d", menstrual.Symptoms[0].Count)
+	}
+	if menstrual.TotalDays != 10 {
+		t.Fatalf("expected 10 logged menstrual days across two cycles, got %d", menstrual.TotalDays)
+	}
+	if menstrual.MoodEntries != 10 {
+		t.Fatalf("expected 10 menstrual mood entries across two cycles, got %d", menstrual.MoodEntries)
+	}
+
+	// The human table reads from the same document, so it must show both.
+	if !strings.Contains(rendered, "Cramps×2") {
+		t.Fatalf("rendered document missing the symptom count:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "avg mood 3.0") {
+		t.Fatalf("rendered document missing the mood average:\n%s", rendered)
+	}
+}

@@ -1,6 +1,7 @@
 package testdb
 
 import (
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -82,6 +83,63 @@ func TestPostgresOwnerStateRecognizesAStaleOwner(t *testing.T) {
 	alive, known := postgresOwnerState(stale)
 	if !known || alive {
 		t.Fatalf("stale owner state = (%v, %v), want (false, true)", alive, known)
+	}
+}
+
+func TestCleanupStalePostgresContainersPreservesUnknownOwnerAndFailedInspection(t *testing.T) {
+	original := runDockerCommandWithError
+	t.Cleanup(func() { runDockerCommandWithError = original })
+
+	removed := make([]string, 0)
+	runDockerCommandWithError = func(args ...string) (string, error) {
+		switch {
+		case len(args) == 4 && args[0] == "ps":
+			return "unknown vanished", nil
+		case len(args) == 3 && args[0] == "inspect" && args[2] == "unknown":
+			return `{"` + postgresOwnerPIDLabel + `":"not-a-pid"}`, nil
+		case len(args) == 3 && args[0] == "inspect" && args[2] == "vanished":
+			return "", errors.New("no such container")
+		case len(args) == 4 && args[0] == "rm":
+			removed = append(removed, args[3])
+			return "", nil
+		default:
+			t.Fatalf("unexpected docker command: %v", args)
+			return "", nil
+		}
+	}
+
+	cleanupStalePostgresContainers(t)
+
+	if len(removed) != 0 {
+		t.Fatalf("removed containers = %v, want none", removed)
+	}
+}
+
+func TestCleanupStalePostgresContainersIsSafeWhenContainerDisappears(t *testing.T) {
+	original := runDockerCommandWithError
+	t.Cleanup(func() { runDockerCommandWithError = original })
+
+	removed := make([]string, 0)
+	runDockerCommandWithError = func(args ...string) (string, error) {
+		switch {
+		case len(args) == 4 && args[0] == "ps":
+			return "orphan", nil
+		case len(args) == 3 && args[0] == "inspect" && args[2] == "orphan":
+			return `{"` + postgresOwnerPIDLabel + `":"` + strconv.Itoa(os.Getpid()) + `","` + postgresOwnerStartLabel + `":"different-process"}`, nil
+		case len(args) == 4 && args[0] == "rm":
+			removed = append(removed, args[3])
+			return "", nil
+		default:
+			t.Fatalf("unexpected docker command: %v", args)
+			return "", nil
+		}
+	}
+
+	cleanupStalePostgresContainers(t)
+	cleanupStalePostgresContainers(t)
+
+	if len(removed) != 2 || removed[0] != "orphan" || removed[1] != "orphan" {
+		t.Fatalf("removed containers = %v, want two independent reclaim attempts for orphan", removed)
 	}
 }
 

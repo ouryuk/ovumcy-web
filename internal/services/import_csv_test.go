@@ -284,7 +284,7 @@ func TestImportServiceCSVRejectsTooLargeFile(t *testing.T) {
 	importService := newImportServiceIntegration(t, database, symptomService)
 
 	rows := make([][]string, 0, MaxImportEntries+1)
-	for i := 0; i < MaxImportEntries+1; i++ {
+	for range MaxImportEntries + 1 {
 		rows = append(rows, importCSVRowForTest(t, "2026-01-01", "No", "None", ""))
 	}
 

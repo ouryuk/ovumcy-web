@@ -25,7 +25,6 @@ func TestNormalizeUserRole(t *testing.T) {
 	}
 
 	for _, testCase := range tests {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -52,7 +51,6 @@ func TestIsOwnerUser(t *testing.T) {
 	}
 
 	for _, testCase := range tests {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -79,7 +77,6 @@ func TestValidateSupportedWebUser(t *testing.T) {
 	}
 
 	for _, testCase := range tests {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 

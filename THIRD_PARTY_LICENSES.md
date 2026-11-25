@@ -44,9 +44,9 @@ file, so a row can name a subpackage (`golang.org/x/net/idna`) or appear beside 
 | `github.com/jackc/puddle/v2` | MIT | [license text](https://github.com/jackc/puddle/blob/v2.2.4/LICENSE) |
 | `github.com/jinzhu/inflection` | MIT | [license text](https://github.com/jinzhu/inflection/blob/v1.0.0/LICENSE) |
 | `github.com/jinzhu/now` | MIT | [license text](https://github.com/jinzhu/now/blob/v1.1.5/License) |
-| `github.com/klauspost/compress/internal/snapref` | BSD-3-Clause | [license text](https://github.com/klauspost/compress/blob/v1.19.2/internal/snapref/LICENSE) |
-| `github.com/klauspost/compress/zstd/internal/xxhash` | MIT | [license text](https://github.com/klauspost/compress/blob/v1.19.2/zstd/internal/xxhash/LICENSE.txt) |
-| `github.com/klauspost/compress` | Apache-2.0 | [license text](https://github.com/klauspost/compress/blob/v1.19.2/LICENSE) |
+| `github.com/klauspost/compress/internal/snapref` | BSD-3-Clause | [license text](https://github.com/klauspost/compress/blob/v1.20.4/internal/snapref/LICENSE) |
+| `github.com/klauspost/compress/zstd/internal/xxhash` | MIT | [license text](https://github.com/klauspost/compress/blob/v1.20.4/zstd/internal/xxhash/LICENSE.txt) |
+| `github.com/klauspost/compress` | Apache-2.0 | [license text](https://github.com/klauspost/compress/blob/v1.20.4/LICENSE) |
 | `github.com/mattn/go-colorable` | MIT | [license text](https://github.com/mattn/go-colorable/blob/v0.1.16/LICENSE) |
 | `github.com/mattn/go-isatty` | MIT | [license text](https://github.com/mattn/go-isatty/blob/v0.0.24/LICENSE) |
 | `github.com/philhofer/fwd` | MIT | [license text](https://github.com/philhofer/fwd/blob/v1.2.1/LICENSE.md) |

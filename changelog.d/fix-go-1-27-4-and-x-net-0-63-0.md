@@ -20,3 +20,15 @@
   pins cannot read: staticcheck v0.8.1 failed on every package ("export data version 5 is
   greater than maximum supported version 4") and gosec v2.29.0 reported "package has type errors".
   The Go-tools cache key carries the x/tools version so no stale binary is restored.
+- **Three npm dev dependencies lifted in the lockfile** (`npm update --package-lock-only`), clearing
+  the ten HIGH findings `trivy-fs` reported in `package-lock.json`: `undici` 8.10.0 → 8.13.1 (via
+  `jsdom`; CVE-2026-19534, -84961, -85152, -87018, -109383, -109829, -109869),
+  `brace-expansion` 5.0.9 → 5.1.0 (via `minimatch`; CVE-2026-102276, -102278) and `source-map-js`
+  1.2.1 → 1.2.4 (via `@tailwindcss/node` and `css-tree`; CVE-2026-93749). All three are within the
+  ranges their dependents already declare; nothing is shipped from them.
+
+### Internal
+
+- **`export --out` carries a `#nosec G304` annotation.** `writeExportFile` opens the path the
+  operator typed on the command line; the finding was a true positive about the shape of the call
+  and a false positive about its trust boundary, as with `internal/security/local_file.go`.

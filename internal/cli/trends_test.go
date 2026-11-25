@@ -53,7 +53,7 @@ func seedTrendsFixture(t *testing.T, databasePath string) (models.User, uint, ui
 		time.Date(2026, time.March, 25, 0, 0, 0, 0, time.UTC),
 	}
 	for _, start := range cycleStarts {
-		for periodDay := 0; periodDay < 5; periodDay++ {
+		for periodDay := range 5 {
 			logEntry := models.DailyLog{
 				UserID:     user.ID,
 				Date:       start.AddDate(0, 0, periodDay),

@@ -200,6 +200,18 @@ func buildPhaseMoodInsightsFromCycles(logs []models.DailyLog, cycles []completed
 	return insights, hasData
 }
 
+// buildPhaseSymptomInsightsWithMap is the symptom half of the phase analytics
+// as the STATS PAGE reads it: gated on the pattern minimum, because that page
+// claims a pattern and must have the cycles behind it.
+//
+// The gate lives here, in the surface wrapper, and NOT in the counting itself:
+// buildPhaseSymptomInsightsFromCycles counts over whatever completed cycles it
+// is handed. A surface that reports the cycle count beside what it could
+// measure — the `ovumcy trends` CLI — therefore counts below the pattern
+// minimum while this one does not, and the two agree from the minimum upward
+// because they share the counting.
+//
+// Regression: TestBuildCyclePhaseTrendsReportsSymptomsBelowThePatternMinimum.
 func buildPhaseSymptomInsightsWithMap(logs []models.DailyLog, location *time.Location, symptomByID map[uint]models.SymptomType) ([]StatsPhaseSymptomInsight, bool) {
 	cycles := buildCompletedCyclePhaseContexts(logs, location)
 	if len(cycles) < minimumPhaseInsightCycles || len(symptomByID) == 0 {
@@ -222,10 +234,19 @@ func buildPhaseSymptomInsightsWithMap(logs []models.DailyLog, location *time.Loc
 // moods for a phase it refused to report symptoms for — the same "half the
 // substitution" split the confirmed-cycle stats already carry a fix for.
 //
+// The gate lives in the surface wrapper and NOT in the counting itself:
+// buildPhaseSymptomInsightsFromCycles counts over whatever completed cycles it
+// is handed. A surface that reports the cycle count beside what it could
+// measure — the `ovumcy trends` CLI — therefore counts below the pattern
+// minimum while the stats page does not, and the two agree from the minimum
+// upward because they share the counting.
+//
 // cycles is passed in rather than rebuilt so the caller pays for the completed
 // cycle contexts ONCE and both halves read the same list: two calls to
 // buildCompletedCyclePhaseContexts can only disagree if the detector changes
 // between them.
+//
+// Regression: TestBuildCyclePhaseTrendsReportsSymptomsBelowThePatternMinimum.
 func buildPhaseSymptomInsightsFromCycles(logs []models.DailyLog, cycles []completedCyclePhaseContext, location *time.Location, symptomByID map[uint]models.SymptomType) ([]StatsPhaseSymptomInsight, bool) {
 	if len(symptomByID) == 0 {
 		return nil, false

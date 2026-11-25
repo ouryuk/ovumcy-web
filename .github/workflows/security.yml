@@ -3,6 +3,9 @@ name: Security
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   TRIVY_IMAGE: aquasec/trivy:0.68.2@sha256:05d0126976bdedcd0782a0336f77832dbea1c81b9cc5e4b3a5ea5d2ec863aca7
+  # git SHA for golang.org/x/tools v0.52.0: 16517d951552611e7bd358c48ee1051fd0e57b0c (verified via go list -m -json)
+  # gosec is built against this x/tools, not its own: .github/actions/go-install-on-xtools.
+  ANALYSIS_XTOOLS_VERSION: v0.52.0
 
 on:
   push:
@@ -50,7 +53,14 @@ jobs:
 
       - name: Install gosec
         # git SHA for v2.29.0: deb54465fea23d19a77f037e11e6589021f8501d (verified via go list -m -json)
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+        # Built against a newer x/tools: Go 1.27.4's export data leaves a
+        # plainly installed gosec v2.29.0 reporting "package has type errors"
+        # for every package it loads.
+        uses: ./.github/actions/go-install-on-xtools
+        with:
+          package: github.com/securego/gosec/v2/cmd/gosec
+          version: v2.29.0
+          xtools-version: ${{ env.ANALYSIS_XTOOLS_VERSION }}
 
       - name: Prepare security artifact directory
         run: mkdir -p .tmp/security

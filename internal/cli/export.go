@@ -302,6 +302,8 @@ func exportSymptomTypeFrom(symptom models.SymptomType) exportSymptomType {
 // and truncates only through that same handle. The file is closed before the
 // error is reported so the operator can act on it immediately.
 func writeExportFile(path string, payload []byte) error {
+	// #nosec G304 -- the path is the operator's own --out argument to a local CLI command, never
+	// request input, and the file is created with mode 0600 before any byte is written.
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("write export: %w", err)

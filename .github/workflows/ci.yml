@@ -369,6 +369,10 @@ jobs:
       DEADCODE_VERSION: v0.49.0
       # git SHA for v2.13.2: 27774aaf853a4fd21f1dd5e69439459dc1b26e68 (verified via go list -m -json)
       GOLANGCI_LINT_VERSION: v2.13.2
+      # git SHA for golang.org/x/tools v0.52.0: 16517d951552611e7bd358c48ee1051fd0e57b0c (verified via go list -m -json)
+      # staticcheck and golangci-lint are built against this x/tools, not their
+      # own: see .github/actions/go-install-on-xtools.
+      ANALYSIS_XTOOLS_VERSION: v0.52.0
       # git SHA for v1.7.12: 914e7df21a07ef503a81201c76d2b11c789d3fca (verified via go list -m -json)
       ACTIONLINT_VERSION: v1.7.12
       # git SHA for v1.6.0: 5348b744d0983d85713295ea08a20cca1654a45e (verified via go list -m -json)
@@ -467,7 +471,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/go/bin
-          key: ${{ runner.os }}-gotools-go${{ steps.setup-go.outputs.go-version }}-staticcheck${{ env.STATICCHECK_VERSION }}-deadcode${{ env.DEADCODE_VERSION }}-golangcilint${{ env.GOLANGCI_LINT_VERSION }}-actionlint${{ env.ACTIONLINT_VERSION }}
+          key: ${{ runner.os }}-gotools-go${{ steps.setup-go.outputs.go-version }}-staticcheck${{ env.STATICCHECK_VERSION }}-deadcode${{ env.DEADCODE_VERSION }}-golangcilint${{ env.GOLANGCI_LINT_VERSION }}-actionlint${{ env.ACTIONLINT_VERSION }}-xtools${{ env.ANALYSIS_XTOOLS_VERSION }}
 
       - name: Verify the restored binaries are the pinned versions
         # A cache hit is only as good as its key, and a key that quietly stopped
@@ -489,10 +493,20 @@ jobs:
           "$bin/golangci-lint" --version | grep -F "version ${GOLANGCI_LINT_VERSION#v} "
           "$bin/actionlint" -version | grep -Fx "$ACTIONLINT_VERSION"
           test -x "$bin/deadcode"
+          for tool in staticcheck golangci-lint; do
+            go version -m "$bin/$tool" | awk '$1=="dep" && $2=="golang.org/x/tools" {print $3}' | grep -Fx "$ANALYSIS_XTOOLS_VERSION"
+          done
 
+      # Not a plain `go install`: Go 1.27.4 writes export data the analyzers'
+      # own x/tools cannot read (staticcheck v0.8.1 fails on every package with
+      # "export data version 5 is greater than maximum supported version 4").
       - name: Install staticcheck
         if: steps.go-tools.outputs.cache-hit != 'true'
-        run: go install "honnef.co/go/tools/cmd/staticcheck@$STATICCHECK_VERSION"
+        uses: ./.github/actions/go-install-on-xtools
+        with:
+          package: honnef.co/go/tools/cmd/staticcheck
+          version: ${{ env.STATICCHECK_VERSION }}
+          xtools-version: ${{ env.ANALYSIS_XTOOLS_VERSION }}
 
       # The Go wildcards in this job are scoped to our module's package trees
       # (cmd, internal, migrations, scripts, web) instead of ./... — this job
@@ -565,7 +579,11 @@ jobs:
 
       - name: Install golangci-lint
         if: steps.go-tools.outputs.cache-hit != 'true'
-        run: go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$GOLANGCI_LINT_VERSION"
+        uses: ./.github/actions/go-install-on-xtools
+        with:
+          package: github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          xtools-version: ${{ env.ANALYSIS_XTOOLS_VERSION }}
 
       - name: Install actionlint
         if: steps.go-tools.outputs.cache-hit != 'true'
@@ -915,7 +933,12 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - coverage-merge
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Codecov has a project for ovumcy/ovumcy-web and for nothing else. From a fork,
+    # `upload` is answered with "Repository not found"; on a pull_request that fails
+    # this lane (fail_ci_if_error, and continue-on-error is off for same-repo PRs),
+    # on a push it only logs an error. Uploading is all this job does and no gate
+    # reads its result, so elsewhere it is skipped rather than left to fail.
+    if: github.repository == 'ovumcy/ovumcy-web' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     permissions:
       contents: read
       id-token: write
@@ -1877,8 +1900,16 @@ jobs:
     # documentation-only merge, where `image-smoke` reports `success` in the
     # push run. Only `run_core` is cleared on push, and it clears the other
     # three lanes.
+    #
+    # And only from ovumcy/ovumcy-web. `ghcr.io/<owner>/<repo>` is the package
+    # this job publishes, and for a fork that is a package nobody pulls: the
+    # first push creates it private, and "verify every public tag anonymously"
+    # then fails after the digest is already up. The image itself is still
+    # built and scanned on every push and pull request, here (`image-smoke`)
+    # and in security.yml (`trivy-image`); only the publish is upstream's.
     if: >-
       ${{ !cancelled()
+      && github.repository == 'ovumcy/ovumcy-web'
       && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       && github.ref == 'refs/heads/main'
       && needs.test.result == 'success'

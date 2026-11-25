@@ -83,7 +83,10 @@ func TestDefaultBuiltinSymptomsIndependentSlices(t *testing.T) {
 	}
 
 	// Distinct backing arrays: appending to one cannot be observed by the other.
-	first = append(first, BuiltinSymptom{Key: "extra"})
+	grown := append(first, BuiltinSymptom{Key: "extra"})
+	if len(grown) != len(first)+1 {
+		t.Fatalf("len(grown) = %d, want %d", len(grown), len(first)+1)
+	}
 	if len(second) != len(defaultBuiltinSymptoms) {
 		t.Fatalf("second length = %d, want %d after appending to first", len(second), len(defaultBuiltinSymptoms))
 	}

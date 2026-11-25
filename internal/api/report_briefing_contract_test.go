@@ -13,8 +13,9 @@ import (
 )
 
 // fetchReport drives the real authenticated request path so the contract
-// exercised here is the transport's, not a constructed DTO's.
-func fetchReport(t *testing.T, app *fiber.App, authCookie string, query string) (int, string, AppointmentBriefingResponse) {
+// exercised here is the transport's, not a constructed DTO's. It asserts the
+// 200 every success-path case expects and returns the decoded payload.
+func fetchReport(t *testing.T, app *fiber.App, authCookie string, query string) AppointmentBriefingResponse {
 	t.Helper()
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/report"+query, nil)
@@ -24,16 +25,29 @@ func fetchReport(t *testing.T, app *fiber.App, authCookie string, query string) 
 	request.Header.Set(timezoneHeaderName, "UTC")
 
 	response := mustAppResponse(t, app, request)
-	status := response.StatusCode
+	assertStatusCode(t, response, http.StatusOK)
 	body := mustReadBodyString(t, response.Body)
 
-	var payload AppointmentBriefingResponse
-	if status == http.StatusOK {
-		if err := json.Unmarshal([]byte(body), &payload); err != nil {
-			t.Fatalf("decode briefing payload: %v\n%s", err, body)
-		}
+	payload := AppointmentBriefingResponse{}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("decode briefing payload: %v\n%s", err, body)
 	}
-	return status, body, payload
+	return payload
+}
+
+// fetchReportStatus answers only the status, for the refusal case.
+func fetchReportStatus(t *testing.T, app *fiber.App, authCookie string, query string) int {
+	t.Helper()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/report"+query, nil)
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Accept-Language", "en")
+	request.Header.Set("Cookie", joinCookieHeader(authCookie, timezoneCookieName+"=UTC"))
+	request.Header.Set(timezoneHeaderName, "UTC")
+
+	response := mustAppResponse(t, app, request)
+	_ = mustReadBodyString(t, response.Body)
+	return response.StatusCode
 }
 
 func TestAppointmentBriefingSummarisesLogsCyclesAndSymptoms(t *testing.T) {
@@ -60,7 +74,7 @@ func TestAppointmentBriefingSummarisesLogsCyclesAndSymptoms(t *testing.T) {
 	})
 
 	// A range that covers the whole recorded history.
-	_, _, payload := fetchReport(t, app, authCookie, "?from="+services.AddCalendarDays(today, -90, time.UTC).Format("2006-01-02")+"&to="+today.Format("2006-01-02"))
+	payload := fetchReport(t, app, authCookie, "?from="+services.AddCalendarDays(today, -90, time.UTC).Format("2006-01-02")+"&to="+today.Format("2006-01-02"))
 
 	if !payload.HasData || payload.TotalEntries != 4 {
 		t.Fatalf("total_entries = %d has_data = %v, want 4 logged days", payload.TotalEntries, payload.HasData)
@@ -98,9 +112,11 @@ func TestAppointmentBriefingSummarisesLogsCyclesAndSymptoms(t *testing.T) {
 	}
 }
 
-// A narrower range excludes the cycle that ended before it opened and the one
-// that started after it closed, but keeps a cycle the range runs through —
-// a clinician asking about a window wants the straddling cycles too.
+// A narrower range drops the cycle that ended before it opened but keeps the
+// one the range runs through, even though that cycle started before `from` —
+// a clinician asking about a window wants the straddling cycle too. (All four
+// overlap cases are covered at the service layer by
+// TestFilterBriefingCyclesKeepsCyclesOverlappingTheRange.)
 func TestAppointmentBriefingFiltersCyclesToTheRequestedRange(t *testing.T) {
 	app, database, _ := newOnboardingTestAppWithLocation(t, time.UTC)
 	user, authCookie, today := newStatsOverviewOwner(t, app, database, "briefing-range@example.com")
@@ -109,7 +125,7 @@ func TestAppointmentBriefingFiltersCyclesToTheRequestedRange(t *testing.T) {
 	// from/to bounding only the most recent completed cycle.
 	from := services.AddCalendarDays(today, -33, time.UTC).Format("2006-01-02")
 	to := services.AddCalendarDays(today, -5, time.UTC).Format("2006-01-02")
-	_, _, payload := fetchReport(t, app, authCookie, "?from="+from+"&to="+to)
+	payload := fetchReport(t, app, authCookie, "?from="+from+"&to="+to)
 
 	if len(payload.CompletedCycles) != 1 {
 		t.Fatalf("completed_cycles = %d entries, want only the cycle the range runs through: %+v", len(payload.CompletedCycles), payload.CompletedCycles)
@@ -125,11 +141,8 @@ func TestAppointmentBriefingReturnsAnEmptyAnswerWith200ForAnEmptyRange(t *testin
 	user := createOnboardingTestUser(t, database, "briefing-empty@example.com", "StrongPass1", true)
 	authCookie := loginAndExtractAuthCookie(t, app, user.Email, "StrongPass1")
 
-	status, _, payload := fetchReport(t, app, authCookie, "?from=2026-01-01&to=2026-01-31")
+	payload := fetchReport(t, app, authCookie, "?from=2026-01-01&to=2026-01-31")
 
-	if status != http.StatusOK {
-		t.Fatalf("empty range answered %d, want 200", status)
-	}
 	if payload.HasData || payload.TotalEntries != 0 || payload.DateFrom != "" || payload.DateTo != "" {
 		t.Fatalf("empty range payload = %+v, want has_data=false and no covered span", payload)
 	}
@@ -149,14 +162,11 @@ func TestAppointmentBriefingDoesNotLeakAnotherOwnersData(t *testing.T) {
 	second := createOnboardingTestUser(t, database, "briefing-second@example.com", "StrongPass1", true)
 	secondCookie := loginAndExtractAuthCookie(t, app, second.Email, "StrongPass1")
 
-	_, _, first := fetchReport(t, app, firstCookie, "")
-	if !first.HasData {
+	firstBriefing := fetchReport(t, app, firstCookie, "")
+	if !firstBriefing.HasData {
 		t.Fatal("first owner's briefing is empty — the fixture did not build the state it claims")
 	}
-	status, _, secondBriefing := fetchReport(t, app, secondCookie, "")
-	if status != http.StatusOK {
-		t.Fatalf("second owner answered %d, want 200", status)
-	}
+	secondBriefing := fetchReport(t, app, secondCookie, "")
 	if secondBriefing.HasData || len(secondBriefing.CompletedCycles) != 0 {
 		t.Fatalf("second owner saw another owner's briefing: %+v", secondBriefing)
 	}
@@ -174,7 +184,7 @@ func TestAppointmentBriefingRefusesAnInvalidRangeWith400(t *testing.T) {
 		"trailing junk": "?from=2026/05/01&to=2026-05-31",
 	} {
 		t.Run(name, func(t *testing.T) {
-			status, _, _ := fetchReport(t, app, authCookie, query)
+			status := fetchReportStatus(t, app, authCookie, query)
 			if status != http.StatusBadRequest {
 				t.Fatalf("query %q answered %d, want 400", query, status)
 			}

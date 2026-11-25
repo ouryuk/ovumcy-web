@@ -1,60 +1,99 @@
-# Task report: `ovumcy predict` — a read-only next-cycle-window CLI
+# Task report: appointment briefing prototype (`GET /api/v1/report`)
 
 ## Why
 
-The dashboard, the calendar feed and the webhook notify pass already project each owner's next
-period start, ovulation date and fertile window — but only behind a login. The repo's recent
-scout additions (summary, trends, export) built a shell-side, read-only family of operator
-commands, and the one analytics gap left open was exactly the suggestion in the scout brief:
-a **predictive next-cycle window** was still missing. An operator (or a monitoring script) had
-no way to answer "what is this account's projected window as of today?" without opening the
-browser app or reverse-engineering the derivation. There is no roadmap/TODO naming an unstarted
-item, so this gap is taken as the prototype, in the same style as `feat-cli-trends-phase-analytics`.
+Two of the three candidate gaps from the task brief have already shipped: the
+read-only cycle-history API (`GET /api/v1/stats/cycles`, declared in
+`docs/openapi.yaml` line ~2100 and merged from
+`docs/proposals/cycle-history-api.md`) and the token-authenticated `.ics`
+calendar feed (`GET /calendar/feed/:token.ics`, covered by the whole
+*Calendar feed subscription* section of `docs/SECURITY_INVARIANTS.md` and its
+restore-fence machinery). Building near either would have been re-work.
+
+The remaining highest-value gap was the **appointment briefing**: an owner
+walking into a clinician's office today has to open `/exports/summary`,
+`/exports/json` and `/stats` side by side and assemble the story by hand. No
+single read answers "what happened between these dates" — logged days, which
+completed cycles ran through the window, and which symptoms were recorded how
+often. The data and the services that read it already exist; only the composed,
+owner-scoped, audited read was missing.
 
 ## What
 
-- New read-only CLI subcommand: `ovumcy predict <email> [--id <id>] [--tz <IANA name>] [--json]`.
-- Human table, or a versioned `ovumcy-predict/v1` JSON document, reporting:
-  - where the owner stands today: cycle day, phase, fertility status, pregnancy pause;
-  - the **basis** the projection was computed from — completed cycles, average/median/predicted
-    cycle length, predicted period length, personalised luteal phase — so an operator can judge
-    how much to trust the numbers (twenty observed cycles are not an onboarding default);
-  - the projection: last period start, next period start, ovulation date (+ `ovulation_exact`
-    clamp flag), six-day fertile window;
-  - the projection disclaimer in every rendering — script and human can never disagree about it.
-- Explicit degradation: a pregnancy pause prints "predictions are suppressed"; an owner with no
-  cycle history prints "nothing can be projected yet" instead of an empty document.
+- **`GET /api/v1/report?from=&to=`** — owner-scoped (`AuthRequired` +
+  `OwnerOnly`), JSON only, additive. `from`/`to` are the same inclusive
+  `YYYY-MM-DD` bounds the export endpoints accept; an unparseable or reversed
+  range is `400` before any data is read, an empty range is `200` with
+  `has_data: false` and empty lists (never `404`/`500`).
+- The response carries:
+  - `total_entries`, `has_data`, `date_from`, `date_to` — the export summary's
+    aggregate, where the dates are the span of the logged entries themselves;
+  - `completed_cycles` — the `/api/v1/stats/cycles` entries filtered to every
+    cycle **overlapping** the range (a clinician asking about "May" gets the
+    cycle that runs through May even though it started in April);
+  - `symptom_frequency` — per-symptom count of distinct logged days, ordered by
+    count descending then name; built-in symptoms use their catalogued column
+    key, custom symptoms their trimmed name;
+  - `disclaimer` — the medical-safety disclaimer in the request's language.
+- Both list fields are always non-nil `[]` on the wire.
+- **Audited as health-data egress** under the existing `data.export` action
+  with `export_format: "briefing"`, so one operator filter covers every format;
+  refused requests are logged like the exports', and no payload ever enters a
+  log line.
+- **OpenAPI**: `/api/v1/report` declared with the standard `200/400/401/403/429`
+  set; new `AppointmentBriefing` and `BriefingSymptomCount` schemas with
+  `additionalProperties: false` and full `required`, pinned to the DTOs by a
+  spec-pin test in both directions.
 
 ## How
 
-- `internal/cli/predict.go` — argument parsing mirrors `trends.go` exactly (same email/id
-  vocabulary via `resolveOperatorUser`, same `--flag value` / `--flag=value` forms, single usage
-  string). All numbers come from the existing `services.BuildCycleStatsFromLogs` — the exact
-  derivation the dashboard uses — so the CLI cannot drift from what the owner sees. The full
-  `models.User` row is re-fetched because the luteal/baseline pass consumes the onboarding
-  fields the operator summary does not carry.
-- Date rendering uses `CalendarDayKey` semantics (value's own calendar components): the baseline
-  anchors carry request-location wall clocks, and a `UTC()` conversion would shift the printed
-  day by one for non-UTC `--tz` — caught by the `Europe/Madrid` test.
-- `cmd/ovumcy/commands.go` — `predict` dispatch wired like `summary`/`trends` (database config
-  only; no secret is read; nothing is written).
-- Tests `internal/cli/predict_test.go`: seeded 28-day fixture pinned to 2026-03-27 (day 3 of a
-  live cycle) asserts the full JSON projection (next period 2026-04-22, ovulation 2026-04-07,
-  fertile window 2026-04-02→04-07, basis 3 cycles / median 28), the human table, `--id` +
-  `--tz` handling and the bad-arg contract, the no-history path, and pregnancy-pause
-  suppression. Clock pinning goes through the `predictNow` variable, mirroring `summaryNow`.
-- Changelog fragment `changelog.d/feat-cli-predict-next-cycle-window.md`.
-- Verified locally per CLAUDE.md: `gofmt -l` clean, `go vet ./cmd/... ./internal/... ./web/...`
-  clean, `go build ./...` clean; scoped tests run for the two touched packages
-  (`internal/cli` predict tests + full `cmd/ovumcy` suite) pass. Full Go suite is CI-gated
-  (ccb751bb). Internal `internal/cli/zz_idzero_test.go` left untouched.
+Additive only; no schema change, no migration, no new dependency, no new
+service wiring.
+
+- `internal/services/appointment_briefing.go`
+  - `(*ExportService).BuildBriefingSummary` — the range summary plus the
+    symptom frequency from **one** `LoadDataForRange` read (the same read path
+    the JSON/CSV exports use), counting each symptom once per logged day.
+  - `FilterBriefingCycles` — a pure calendar-day overlap filter over the
+    existing `CycleHistoryEntry` values; the cycles themselves come from the
+    unmodified `StatsService.BuildCycleHistory`, so the briefing cannot
+    disagree with `/api/v1/stats/cycles` about which cycles exist.
+- `internal/api/handlers_report.go` + `internal/api/report_briefing_dto.go` —
+  the handler reuses `exportUserAndRange` (auth + range parsing + egress
+  attribution), `newCycleHistoryResponse` (the cycles keep the exact published
+  shape), the existing error mappings, and `medicalDisclaimer`.
+- `internal/api/routes.go` — `report := v1.Group("/report", handler.AuthRequired)`
+  with `report.Get("", handler.OwnerOnly, handler.GetReport)`.
+
+### Tests (written; run on GitHub Actions per the no-local-go rule)
+
+- `internal/services/appointment_briefing_test.go` — day-deduped counting,
+  count-then-name ordering, error pass-through, overlap-filter semantics
+  (straddle both bounds, both-bounds-nil, nil-result-non-nil).
+- `internal/api/report_briefing_contract_test.go` — real request path:
+  composed payload (cycles + summary + frequency + disclaimer), range
+  filtering, `200`/empty for an owner with no logs, owner isolation (second
+  owner sees nothing), `400` on reversed/unparseable ranges.
+- `internal/api/report_briefing_spec_pin_test.go` — both new schemas pinned
+  against their DTOs, required included.
+- `changelog.d/appointment-briefing-report-api.md` fragment added.
+
+### Security-invariant compliance
+
+Owner-only chain on the route; every read is scoped by `user.ID` via the
+existing services (the egress-ownership stub pattern in the services tests
+covers the acting-owner operand); the audit line follows the
+*Privacy and PII* egress rules verbatim (fixed action/target, format detail
+only); no secret, token, or new cookie is introduced; no `template.HTML` —
+JSON transport only. The briefing is strictly read-only, so it needs no
+re-authentication, exactly like the exports.
 
 ## Next steps
 
-- If the prototype is adopted, consider surfacing `IsIrregularCycleSpread` (already computed in
-  services) as a `cycle_basis.irregular` field so scripts can gate trust programmatically.
-- A `--days N` horizon (project N cycles forward via `appendPredictedCycles`-style stepping)
-  would extend this without any new derivation.
-- The summary/trends/predict commands share an argument-parsing shape now in three copies; a
-  shared `operatorTargetArgs` helper would be a small, safe follow-up refactor (deliberately not
-  done here — additive only).
+1. **`/report` HTML page.** Render the same briefing as a printable page for
+   owners who want paper for the appointment; the API now defines the shape so
+   page and clients cannot drift. Out of prototype scope (templates + i18n).
+2. **CSV variant** of the briefing (one summary row + one cycle row + one
+   frequency row) for clinician hand-off.
+3. **Default window**: consider `?days=90` sugar; the current bounds-only
+   contract matches the export endpoints deliberately.

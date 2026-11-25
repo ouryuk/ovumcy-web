@@ -1011,6 +1011,65 @@ components:
           description: ovulation_date is the length-based model estimate. Always false when ovulation_date is null.
       additionalProperties: false
 
+    AppointmentBriefing:
+      type: object
+      description: |
+        The appointment briefing: what was recorded over a range, which
+        completed cycles ran through it, and per-symptom day counts. The range
+        aggregates come from the same read the export summary uses and the
+        cycles are the `/api/v1/stats/cycles` entries filtered to the range,
+        so the briefing cannot disagree with either about the same window.
+      required:
+        - date_from
+        - date_to
+        - total_entries
+        - has_data
+        - completed_cycles
+        - symptom_frequency
+        - disclaimer
+      properties:
+        date_from:
+          type: string
+          format: date
+          description: First logged day covered by the summary; empty when the range holds no entries.
+        date_to:
+          type: string
+          format: date
+          description: Last logged day covered by the summary; empty when the range holds no entries.
+        total_entries:
+          type: integer
+          description: Number of logged days in the range.
+        has_data:
+          type: boolean
+          description: False when the range holds no logged entries at all.
+        completed_cycles:
+          type: array
+          description: Completed cycles overlapping the range, oldest first. Never null.
+          items: { $ref: '#/components/schemas/CycleHistoryEntry' }
+        symptom_frequency:
+          type: array
+          description: Per-symptom count of distinct logged days, ordered by count descending then name. Built-in symptoms use their catalogued column key; custom symptoms use their trimmed name. Never null.
+          items: { $ref: '#/components/schemas/BriefingSymptomCount' }
+        disclaimer:
+          type: string
+          description: The medical-safety disclaimer, in the request's language.
+      additionalProperties: false
+
+    BriefingSymptomCount:
+      type: object
+      description: One row of the briefing's symptom_frequency list.
+      required:
+        - name
+        - count
+      properties:
+        name:
+          type: string
+          description: Built-in symptom column key, or the trimmed custom symptom name.
+        count:
+          type: integer
+          description: Distinct logged days on which the symptom was recorded within the range.
+      additionalProperties: false
+
     ExportJSONEntry:
       type: object
       description: One day in a JSON export. See [docs/export.md](export.md) for the per-field stability contract.
@@ -2124,6 +2183,41 @@ paths:
                 items: { $ref: '#/components/schemas/CycleHistoryEntry' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  # =========================================================================
+  # appointment briefing
+  # =========================================================================
+  /api/v1/report:
+    get:
+      tags: [stats]
+      summary: Appointment briefing for a date range (owner only).
+      description: |
+        One JSON answer summarising what the owner recorded between `from` and
+        `to` (inclusive, `YYYY-MM-DD` in the user's timezone; both optional):
+        the logged-day summary the export summary publishes, every completed
+        cycle that overlaps the range in exactly the shape
+        `/api/v1/stats/cycles` publishes, and how many distinct logged days
+        each symptom was recorded on, ordered by count descending then name.
+        An owner can hand the answer to a clinician; the request is audited as
+        health-data egress under the same `data.export` action as the file
+        downloads.
+
+        `date_from`/`date_to` are the covered span of the logged entries
+        themselves, not merely the requested bounds; an empty range carries
+        empty strings and `has_data: false` with empty lists, never an error.
+      parameters:
+        - $ref: '#/components/parameters/FromQuery'
+        - $ref: '#/components/parameters/ToQuery'
+      responses:
+        '200':
+          description: Appointment briefing payload.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppointmentBriefing' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
   # =========================================================================

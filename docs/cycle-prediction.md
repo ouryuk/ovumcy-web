@@ -8,7 +8,9 @@ separate gate, and the one that withholds the whole fertility half until the
 account completes its first cycle is described under "First cycle" below.
 The worked examples below are mirrored 1:1 by automated reference tests
 (`internal/services/cycles_reference_test.go`), so the documentation and the
-implementation cannot silently drift apart.
+implementation cannot silently drift apart. The operator CLI's `ovumcy predict`
+command prints this same derivation from the shell — see
+[README → Operator CLI](../README.md#operator-cli).
 
 > [!IMPORTANT]
 > **This is a calendar-based estimate, not medical advice and not a method of

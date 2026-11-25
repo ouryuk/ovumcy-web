@@ -1,4 +1,4 @@
-### Features
+### Added
 
 - **`ovumcy trends` correlates symptoms and moods with cycle phases.** The stats page's phase
   insights lived only behind a login; an operator had no way to ask "which phase do this owner's

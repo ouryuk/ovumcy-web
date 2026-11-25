@@ -1,4 +1,4 @@
-### Features
+### Added
 
 - **`ovumcy predict` projects the next cycle window.** The dashboard and the calendar feed already
   project the next period start, ovulation date and fertile window, but only behind a login; an

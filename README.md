@@ -547,3 +547,5 @@ obliges you to make the complete source code of that version available to its us
 
 Third-party software redistributed with the built application (e.g. htmx) is listed with its
 license in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+<!-- ci-gate self-test 163231 -->

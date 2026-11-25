@@ -56,12 +56,12 @@ file, so a row can name a subpackage (`golang.org/x/net/idna`) or appear beside 
 | `github.com/valyala/bytebufferpool` | MIT | [license text](https://github.com/valyala/bytebufferpool/blob/v1.0.0/LICENSE) |
 | `github.com/valyala/fasthttp/reuseport` | MIT | [license text](https://github.com/valyala/fasthttp/blob/v1.73.0/reuseport/LICENSE) |
 | `github.com/valyala/fasthttp` | MIT | [license text](https://github.com/valyala/fasthttp/blob/v1.73.0/LICENSE) |
-| `golang.org/x/crypto` | BSD-3-Clause | [license text](https://cs.opensource.google/go/x/crypto/+/v0.55.0:LICENSE) |
-| `golang.org/x/net/idna` | BSD-3-Clause | [license text](https://cs.opensource.google/go/x/net/+/v0.58.0:LICENSE) |
+| `golang.org/x/crypto` | BSD-3-Clause | [license text](https://cs.opensource.google/go/x/crypto/+/v0.59.0:LICENSE) |
+| `golang.org/x/net/idna` | BSD-3-Clause | [license text](https://cs.opensource.google/go/x/net/+/v0.63.0:LICENSE) |
 | `golang.org/x/oauth2` | BSD-3-Clause | [license text](https://cs.opensource.google/go/x/oauth2/+/v0.36.0:LICENSE) |
-| `golang.org/x/sync/semaphore` | BSD-3-Clause | [license text](https://cs.opensource.google/go/x/sync/+/v0.22.0:LICENSE) |
-| `golang.org/x/sys` | BSD-3-Clause | [license text](https://cs.opensource.google/go/x/sys/+/v0.47.0:LICENSE) |
-| `golang.org/x/text` | BSD-3-Clause | [license text](https://cs.opensource.google/go/x/text/+/v0.41.0:LICENSE) |
+| `golang.org/x/sync/semaphore` | BSD-3-Clause | [license text](https://cs.opensource.google/go/x/sync/+/v0.25.0:LICENSE) |
+| `golang.org/x/sys` | BSD-3-Clause | [license text](https://cs.opensource.google/go/x/sys/+/v0.50.0:LICENSE) |
+| `golang.org/x/text` | BSD-3-Clause | [license text](https://cs.opensource.google/go/x/text/+/v0.44.0:LICENSE) |
 | `gorm.io/driver/postgres` | MIT | [license text](https://github.com/go-gorm/postgres/blob/v1.6.3/License) |
 | `gorm.io/gorm` | MIT | [license text](https://github.com/go-gorm/gorm/blob/v1.31.2/LICENSE) |
 | `modernc.org/libc` | BSD-3-Clause | [license text](https://gitlab.com/cznic/libc/-/blob/v1.73.4/LICENSE) |

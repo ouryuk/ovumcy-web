@@ -32,3 +32,6 @@
 - **`export --out` carries a `#nosec G304` annotation.** `writeExportFile` opens the path the
   operator typed on the command line; the finding was a true positive about the shape of the call
   and a false positive about its trust boundary, as with `internal/security/local_file.go`.
+- **`coverage-upload` runs in `ovumcy/ovumcy-web` only.** Codecov has no project for a fork and
+  answers the upload with "Repository not found", which failed the lane on every same-repo pull
+  request here; no gate reads this job's result.

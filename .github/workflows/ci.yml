@@ -933,7 +933,12 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - coverage-merge
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Codecov has a project for ovumcy/ovumcy-web and for nothing else. From a fork,
+    # `upload` is answered with "Repository not found"; on a pull_request that fails
+    # this lane (fail_ci_if_error, and continue-on-error is off for same-repo PRs),
+    # on a push it only logs an error. Uploading is all this job does and no gate
+    # reads its result, so elsewhere it is skipped rather than left to fail.
+    if: github.repository == 'ovumcy/ovumcy-web' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     permissions:
       contents: read
       id-token: write

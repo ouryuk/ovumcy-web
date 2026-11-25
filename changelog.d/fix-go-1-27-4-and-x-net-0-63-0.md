@@ -35,3 +35,7 @@
 - **`coverage-upload` runs in `ovumcy/ovumcy-web` only.** Codecov has no project for a fork and
   answers the upload with "Repository not found", which failed the lane on every same-repo pull
   request here; no gate reads this job's result.
+- **`publish-image` publishes from `ovumcy/ovumcy-web` only.** `ghcr.io/<owner>/<repo>` is the
+  package it pushes; from a fork that is a package nobody pulls, created private on first push,
+  after which the job's anonymous verification of the public tags fails. Building and scanning the
+  image (`image-smoke`, `trivy-image`) is unchanged everywhere.

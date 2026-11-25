@@ -1900,8 +1900,16 @@ jobs:
     # documentation-only merge, where `image-smoke` reports `success` in the
     # push run. Only `run_core` is cleared on push, and it clears the other
     # three lanes.
+    #
+    # And only from ovumcy/ovumcy-web. `ghcr.io/<owner>/<repo>` is the package
+    # this job publishes, and for a fork that is a package nobody pulls: the
+    # first push creates it private, and "verify every public tag anonymously"
+    # then fails after the digest is already up. The image itself is still
+    # built and scanned on every push and pull request, here (`image-smoke`)
+    # and in security.yml (`trivy-image`); only the publish is upstream's.
     if: >-
       ${{ !cancelled()
+      && github.repository == 'ovumcy/ovumcy-web'
       && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       && github.ref == 'refs/heads/main'
       && needs.test.result == 'success'

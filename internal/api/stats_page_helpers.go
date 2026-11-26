@@ -241,5 +241,16 @@ func (handler *Handler) buildStatsPageData(ctx context.Context, user *models.Use
 		"BBTChartSummary":                     bbtChartSummary,
 		"IsOwner":                             viewData.IsOwner,
 	}
+
+	// The per-cycle list beside the aggregates. It is the same
+	// BuildCycleHistory result GET /api/v1/stats/cycles publishes, so the table
+	// and the API cannot drift on what a completed cycle is. The read reuses
+	// the view's own error mapping.
+	cycleHistory, err := handler.statsService.BuildCycleHistory(ctx, user, now, location)
+	if err != nil {
+		return nil, err
+	}
+	data["CycleHistory"] = cycleHistory
+	data["HasCycleHistory"] = len(cycleHistory) > 0
 	return data, nil
 }

@@ -1,60 +1,71 @@
-# Task report: `ovumcy predict` — a read-only next-cycle-window CLI
+# Proposal: `ovumcy forecast-accuracy` — scoring the cycle prediction against its own history
 
 ## Why
 
-The dashboard, the calendar feed and the webhook notify pass already project each owner's next
-period start, ovulation date and fertile window — but only behind a login. The repo's recent
-scout additions (summary, trends, export) built a shell-side, read-only family of operator
-commands, and the one analytics gap left open was exactly the suggestion in the scout brief:
-a **predictive next-cycle window** was still missing. An operator (or a monitoring script) had
-no way to answer "what is this account's projected window as of today?" without opening the
-browser app or reverse-engineering the derivation. There is no roadmap/TODO naming an unstarted
-item, so this gap is taken as the prototype, in the same style as `feat-cli-trends-phase-analytics`.
+`ovumcy predict` (and the dashboard/feed behind it) answers "when is the next cycle", but nothing in
+the repo answers the follow-up an operator or an owner reasonably asks next: **how well is that
+prediction actually holding up?** The read-only CLI family (`export`, `summary`, `trends`,
+`predict`) all report current state; none of them reports the model's own historical accuracy. The
+math is documented and deterministic (`docs/cycle-prediction.md`), which makes it *scoreable* — every
+completed cycle is a prediction target whose training data (the cycles before it) is fully known. A
+reproducible accuracy scorecard closes the loop: it tells an operator whether the projection on the
+dashboard deserves trust for *this* account, without a login and without recomputing anything by
+hand. This is additive only: no schema change, no deployment change, no write path.
 
 ## What
 
-- New read-only CLI subcommand: `ovumcy predict <email> [--id <id>] [--tz <IANA name>] [--json]`.
-- Human table, or a versioned `ovumcy-predict/v1` JSON document, reporting:
-  - where the owner stands today: cycle day, phase, fertility status, pregnancy pause;
-  - the **basis** the projection was computed from — completed cycles, average/median/predicted
-    cycle length, predicted period length, personalised luteal phase — so an operator can judge
-    how much to trust the numbers (twenty observed cycles are not an onboarding default);
-  - the projection: last period start, next period start, ovulation date (+ `ovulation_exact`
-    clamp flag), six-day fertile window;
-  - the projection disclaimer in every rendering — script and human can never disagree about it.
-- Explicit degradation: a pregnancy pause prints "predictions are suppressed"; an owner with no
-  cycle history prints "nothing can be projected yet" instead of an empty document.
+- New read-only, no-secret CLI subcommand next to the family:
+  `ovumcy forecast-accuracy <email> [--id <id>] [--tz <IANA name>] [--json]`.
+- For each completed cycle, it recomputes the projection the model **would have made** from only the
+  cycles before it — `services.BuildCycleStatsFromLogs` run at an explicit past "as of" date (the
+  actual cycle start), with logs strictly before that day — and reports:
+  - per cycle: predicted vs actual start, **signed error in days** (positive = model was early),
+    whether the actual start fell inside the model's own recent length range
+    (`LastPeriodStart + Min/MaxCycleLength`), and the basis it predicted from;
+  - summary: mean and median absolute error, worst cycle, and how many predictions landed inside the
+    model's own window (count + percentage);
+  - human table by default, versioned `ovumcy-forecast-accuracy/v1` JSON behind the existing
+    `--json` convention, disclaimer in both.
+- Honest degradation: a cycle the model would not have predicted at all — pregnancy pause, or too
+  little preceding history — is reported **skipped with a reason**, never scored as a zero error;
+  zero or one completed cycle prints "accuracy cannot be measured yet".
 
 ## How
 
-- `internal/cli/predict.go` — argument parsing mirrors `trends.go` exactly (same email/id
-  vocabulary via `resolveOperatorUser`, same `--flag value` / `--flag=value` forms, single usage
-  string). All numbers come from the existing `services.BuildCycleStatsFromLogs` — the exact
-  derivation the dashboard uses — so the CLI cannot drift from what the owner sees. The full
-  `models.User` row is re-fetched because the luteal/baseline pass consumes the onboarding
-  fields the operator summary does not carry.
-- Date rendering uses `CalendarDayKey` semantics (value's own calendar components): the baseline
-  anchors carry request-location wall clocks, and a `UTC()` conversion would shift the printed
-  day by one for non-UTC `--tz` — caught by the `Europe/Madrid` test.
-- `cmd/ovumcy/commands.go` — `predict` dispatch wired like `summary`/`trends` (database config
-  only; no secret is read; nothing is written).
-- Tests `internal/cli/predict_test.go`: seeded 28-day fixture pinned to 2026-03-27 (day 3 of a
-  live cycle) asserts the full JSON projection (next period 2026-04-22, ovulation 2026-04-07,
-  fertile window 2026-04-02→04-07, basis 3 cycles / median 28), the human table, `--id` +
-  `--tz` handling and the bad-arg contract, the no-history path, and pregnancy-pause
-  suppression. Clock pinning goes through the `predictNow` variable, mirroring `summaryNow`.
-- Changelog fragment `changelog.d/feat-cli-predict-next-cycle-window.md`.
-- Verified locally per CLAUDE.md: `gofmt -l` clean, `go vet ./cmd/... ./internal/... ./web/...`
-  clean, `go build ./...` clean; scoped tests run for the two touched packages
-  (`internal/cli` predict tests + full `cmd/ovumcy` suite) pass. Full Go suite is CI-gated
-  (ccb751bb). Internal `internal/cli/zz_idzero_test.go` left untouched.
+- `internal/cli/forecast_accuracy.go` — parsing/rendering mirror `predict.go` exactly (same
+  email/id resolution via `resolveOperatorUser`, `--flag`/`--flag=value` forms, `--tz` default UTC).
+- **No service change was needed.** `BuildCycleStatsFromLogs` already takes an explicit `now` and is
+  package-level and clock-free, so the "as of" prediction is just the production derivation called
+  with a past date — the CLI cannot drift from what the dashboard would have shown. A tiny
+  `filterLogsBeforeDay` enforces the strict training bound (the derivation itself bounds at
+  "not after", which would leak the target cycle's own first day).
+- The scored cycle starts come from the shared detection, not a second implementation: a two-method
+  adapter (`forecastAccuracyLogReader`) plugs the CLI's daily-log repository into
+  `services.StatsDayReader` so `StatsService.BuildCycleHistory` enumerates the same completed cycles
+  the cycle-history API reports. Only the *starts* are consumed from it; each projection is
+  recomputed from the pre-cycle training logs.
+- Everything in the scoring path is deterministic and clock-free (the only clock reads are the
+  pinnable `forecastAccuracyNow` history anchor and the `generated_at` stamp), so the numbers are
+  stable for a given history.
+- `cmd/ovumcy/commands.go` — wired as `forecast-accuracy` next to the other read-only dispatches.
+- Tests (`internal/cli/forecast_accuracy_test.go`, style of `predict_test.go`): a five-cycle fixture
+  with known lengths (28/28/27/28) whose per-cycle errors are provably 0, 0, −1, 0 (asserted row by
+  row, with basis, window and full summary: mean 0.3, median 0, worst −1-day cycle, 3/4 in window);
+  zero history; one completed cycle (insufficient data); pregnancy-pause skip path; JSON shape and
+  `--id`/usage-error handling.
+- Docs: README operator-CLI section updated (list, usage lines, one bullet); changelog fragment
+  `changelog.d/feat-cli-forecast-accuracy.md`.
 
-## Next steps
+## Verification
 
-- If the prototype is adopted, consider surfacing `IsIrregularCycleSpread` (already computed in
-  services) as a `cycle_basis.irregular` field so scripts can gate trust programmatically.
-- A `--days N` horizon (project N cycles forward via `appendPredictedCycles`-style stepping)
-  would extend this without any new derivation.
-- The summary/trends/predict commands share an argument-parsing shape now in three copies; a
-  shared `operatorTargetArgs` helper would be a small, safe follow-up refactor (deliberately not
-  done here — additive only).
+Not run locally per the task rules (no go/vet/build/test on this host); `gofmt`-canonical alignment
+was written by hand. GitHub Actions `ci.yml` is the verdict for build, vet, lint and the Go suite.
+
+## Next steps (beyond this prototype)
+
+- Surface the same scorecard behind the API/UI (an owner-facing "prediction accuracy" insight) — the
+  scoring function is deliberately service-shaped and reusable.
+- Optionally add an explicit window parameter to the service layer (a documented ±N-day period
+  window) if product wants a fixed tolerance band instead of the model's own length range.
+- Track accuracy over time (per-quarter MAE) if operators want trend-of-trust rather than
+  point-in-time.

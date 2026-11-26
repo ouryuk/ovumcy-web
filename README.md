@@ -441,7 +441,7 @@ For deployment paths, reverse-proxy examples, backups, restores, and advanced Po
 
 ## Operator CLI
 
-For self-hosted operators, the binary includes a small local-only CLI: account provisioning, removal, and emergency password reset; the webhook reminder pass and webhook settings; offline data repairs; and a family of read-only, no-secret commands that report on one owner's records (`export`, `summary`, `trends`, `predict`).
+For self-hosted operators, the binary includes a small local-only CLI: account provisioning, removal, and emergency password reset; the webhook reminder pass and webhook settings; offline data repairs; and a family of read-only, no-secret commands that report on one owner's records (`export`, `summary`, `trends`, `predict`, `forecast-accuracy`).
 
 ```bash
 go run ./cmd/ovumcy users create owner@example.com
@@ -458,6 +458,7 @@ go run ./cmd/ovumcy export owner@example.com --out owner.json
 go run ./cmd/ovumcy summary owner@example.com --days 30
 go run ./cmd/ovumcy trends owner@example.com --tz Europe/Madrid
 go run ./cmd/ovumcy predict --id 7 --json
+go run ./cmd/ovumcy forecast-accuracy owner@example.com --json
 ```
 
 Notes:
@@ -474,19 +475,21 @@ Notes:
 - `notify` runs one webhook reminder pass — decides due period/ovulation reminders per owner and delivers them to each owner's configured webhook. It is meant to be scheduled (cron, systemd timer, a Docker one-shot, or Task Scheduler), not run continuously; an optional built-in daily scheduler (`REMINDER_SCHEDULER_ENABLED`) can run the same pass in-process instead. See [docs/notifications.md](docs/notifications.md) for all three reminder channels (in-app banner, webhook, calendar feed), scheduling recipes, and the idempotency/security contract.
 - `webhook show|set <email>` inspects or configures an owner's webhook notification settings (endpoint, enabled state, notify-period/notify-ovulation toggles) from the shell — the same settings the Settings-page form writes. See [docs/notifications.md](docs/notifications.md) for the full flag reference. `webhook` has no `--id` form; an address matching more than one row is refused (naming the ids) rather than configuring whichever row a lookup returns first.
 - `repair` lists the offline data repairs the binary carries; each inspects and reports by default and changes nothing until `--apply`. Unlike every other subcommand it opens the database *without* applying migrations, because it exists for the case where a migration is refusing to run against data it cannot cover — which also stops the server, so there is no application to fix the data in. Today it carries one repair, `symptom-names`, for an account holding two symptoms under the same name. Runbook: [docs/self-hosted.md](docs/self-hosted.md#duplicate-rows-that-refuse-a-migration).
-- `export`, `summary`, `trends` and `predict` are the read-only half of the CLI. All four need no `SECRET_KEY` — they read the database config only — and write nothing: the payload is the owner's health data, not any stored secret. They resolve the owner by `<email>` or by `--id <id>` (the id `users list` prints, which is also how a legacy row whose stored email predates strict sign-in normalization is reached); an address matching more than one row is refused, naming the ids, rather than reporting on whichever row a lookup returned first — retry with `--id`. Their usage lines, exactly as a usage error prints them:
+- `export`, `summary`, `trends`, `predict` and `forecast-accuracy` are the read-only half of the CLI. All five need no `SECRET_KEY` — they read the database config only — and write nothing: the payload is the owner's health data, not any stored secret. They resolve the owner by `<email>` or by `--id <id>` (the id `users list` prints, which is also how a legacy row whose stored email predates strict sign-in normalization is reached); an address matching more than one row is refused, naming the ids, rather than reporting on whichever row a lookup returned first — retry with `--id`. Their usage lines, exactly as a usage error prints them:
 
   ```text
   ovumcy export <email> [--id <id>] [--out <path>]
   ovumcy summary <email> [--id <id>] [--days 7|30|90] [--json]
   ovumcy trends <email> [--id <id>] [--tz <IANA name>] [--json]
   ovumcy predict <email> [--id <id>] [--tz <IANA name>] [--json]
+ovumcy forecast-accuracy <email> [--id <id>] [--tz <IANA name>] [--json]
   ```
 
   - `export` writes the owner's full record as indented JSON — every daily log, the symptom vocabulary as the owner defined it, and the cycle-start dates. It goes to stdout, or to `--out <path>`, which is created with mode `0600` because the payload is intimate health data. Auth material (password/recovery hashes, webhook endpoints) is never included. Its `schema` tag is `ovumcy-export/v1`.
   - `summary` aggregates one owner's daily logs over a `--days 7|30|90` window (default `30`) — adherence, symptom tallies, best/worst mood days and the longest logging streak — as a human table on stdout, or as JSON with `--json` (`ovumcy-summary/v1`).
   - `trends` correlates one owner's symptoms and logged moods with the four cycle phases (menstrual, follicular, ovulation, luteal) over the full log history, using the same completed-cycle phase contexts the stats page uses. `--tz` is an IANA name (default `UTC`) and decides which calendar day a log falls on; `--json` emits `ovumcy-trends/v1`.
   - `predict` projects one owner's next cycle window — next period start, ovulation date and fertile range — by reusing the dashboard's derivation (`services.BuildCycleStatsFromLogs`), so the CLI cannot drift from what the dashboard shows for the same account at the same instant. It prints where the owner stands today and the cycle basis the projection rests on (completed cycles, median, predicted cycle and period lengths, luteal phase). While a pregnancy pause is active the projection is suppressed and it says so; with no cycle history it says nothing can be projected yet; and the output always carries the projection disclaimer (*these dates are projections from past cycles, not guarantees*) — in the table and in the JSON `disclaimer` field alike. `--json` emits `ovumcy-predict/v1`. [docs/cycle-prediction.md](docs/cycle-prediction.md) describes that math in full.
+  - `forecast-accuracy` answers "how well is that prediction holding up?": it walks the owner's completed cycles in order and, for each one, recomputes the projection the model WOULD have made from only the cycles before it — the same `services.BuildCycleStatsFromLogs` derivation, run at an explicit past "as of" date — then scores it against the actual start. Per cycle it reports the signed error in days and whether the actual start fell inside the model's own recent length range; the summary reports mean and median absolute error, the worst cycle, and how many predictions landed inside that window. A cycle the model would not have predicted at all (a pregnancy pause, or too little history) is reported as skipped, never scored 0. `--json` emits `ovumcy-forecast-accuracy/v1`.
 - Treat CLI usage as operator-only access. It is intended for local shell access on the instance, not for browser or remote public administration.
 
 ## Development

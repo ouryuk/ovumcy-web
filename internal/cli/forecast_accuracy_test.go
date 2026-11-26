@@ -83,11 +83,12 @@ func runForecastAccuracyRaw(t *testing.T, databasePath string, args []string) st
 // predicts with KNOWN errors. The shared cycle-history derivation counts a
 // cycle as COMPLETED only once a later start exists (the last start is the
 // open, running cycle), so six starts give five completed cycles, of which
-// the FIRST has no preceding history to train on — four scoreable targets.
-// Their lengths are 28 / 28 / 27 / 28, so every projection (last start +
-// median of the recent lengths, or the 28-day onboarding default when no
-// length has been observed yet) lands on 2026-02-26 / 03-26 / 04-22 / 05-20
-// and the per-cycle errors are exactly 0, -1, 0, 0.
+// the FIRST has no preceding completed cycle to train on, so the cycles
+// starting at the 2nd..5th starts are the four scoreable targets. Their
+// lengths are 28 / 28 / 27 / 28, so every projection (last start + median of
+// the recent lengths, or the 28-day onboarding default when no length has
+// been observed yet) lands on 2026-01-29 / 02-26 / 03-26 / 04-22 and the
+// per-cycle errors are exactly 0, 0, -1, 0.
 func accuracyFixtureStarts() []time.Time {
 	return []time.Time{
 		time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
@@ -128,11 +129,11 @@ func TestRunForecastAccuracyCommandScoresKnownErrorsAsJSON(t *testing.T) {
 		t.Fatalf("expected 4 per-cycle rows, got %d", len(document.Cycles))
 	}
 
-	expectedPredicted := []string{"2026-02-26", "2026-03-26", "2026-04-22", "2026-05-20"}
-	expectedActual := []string{"2026-02-26", "2026-03-25", "2026-04-22", "2026-05-20"}
-	expectedErrors := []int{0, -1, 0, 0}
+	expectedPredicted := []string{"2026-01-29", "2026-02-26", "2026-03-26", "2026-04-22"}
+	expectedActual := []string{"2026-01-29", "2026-02-26", "2026-03-25", "2026-04-22"}
+	expectedErrors := []int{0, 0, -1, 0}
 	expectedBasis := []forecastAccuracyBasis{
-		// Only the first cycle's period days precede 2026-02-26: no length has
+		// Only the first cycle's period days precede 2026-01-29: no length has
 		// been observed yet, so the projection rests on the 28-day onboarding
 		// default rather than on a median.
 		{CompletedCycles: 0, MedianCycleLength: 28, PredictedCycleLength: 28},
@@ -141,9 +142,9 @@ func TestRunForecastAccuracyCommandScoresKnownErrorsAsJSON(t *testing.T) {
 		{CompletedCycles: 3, MedianCycleLength: 28, PredictedCycleLength: 28},
 	}
 	// Row 0 rested on a default with no observed length range (MinCycleLength
-	// is 0), so no window is credited; row 1's actual start missed the single-
-	// day observed range by a day; rows 2 and 3 hit it.
-	expectedWithin := []bool{false, false, true, true}
+	// is 0), so no window is credited; rows 1 and 3 hit the observed range; row
+	// 2's actual start missed the single-day range by a day.
+	expectedWithin := []bool{false, true, false, true}
 	for index, row := range document.Cycles {
 		if row.ActualStart != expectedActual[index] || row.PredictedStart != expectedPredicted[index] {
 			t.Fatalf("row %d: expected predicted %s vs actual %s, got %s vs %s", index, expectedPredicted[index], expectedActual[index], row.PredictedStart, row.ActualStart)
@@ -175,8 +176,8 @@ func TestRunForecastAccuracyCommandScoresKnownErrorsAsJSON(t *testing.T) {
 	if summary.WorstErrorDays != 1 || summary.WorstActualStart != "2026-03-25" || summary.WorstPredictedStart != "2026-03-26" {
 		t.Fatalf("unexpected worst cycle: %+v", summary)
 	}
-	if summary.WithinWindow != 2 || summary.WithinWindowPercent != 50 {
-		t.Fatalf("expected 2/4 within window (50%%), got %d (%v%%)", summary.WithinWindow, summary.WithinWindowPercent)
+	if summary.WithinWindow != 3 || summary.WithinWindowPercent != 75 {
+		t.Fatalf("expected 3/4 within window (75%%), got %d (%v%%)", summary.WithinWindow, summary.WithinWindowPercent)
 	}
 }
 
@@ -190,12 +191,12 @@ func TestRunForecastAccuracyCommandRendersHumanTable(t *testing.T) {
 		"ovumcy forecast-accuracy — accuracy-owner@example.com",
 		"timezone: Europe/Madrid, completed cycles: 5",
 		"evaluated 4 of 5 completed cycles (0 skipped)",
-		"2026-02-26  predicted 2026-02-26  error +0d  in window: false",
+		"2026-01-29  predicted 2026-01-29  error +0d  in window: false",
+		"2026-02-26  predicted 2026-02-26  error +0d  in window: true",
 		"2026-03-25  predicted 2026-03-26  error -1d  in window: false",
 		"2026-04-22  predicted 2026-04-22  error +0d  in window: true",
-		"2026-05-20  predicted 2026-05-20  error +0d  in window: true",
 		"summary: mean abs error 0.3d, median 0.0d, worst 1d (actual 2026-03-25, predicted 2026-03-26)",
-		"within predicted window: 2/4 (50.0%)",
+		"within predicted window: 3/4 (75.0%)",
 		"does not guarantee future predictions",
 	} {
 		if !strings.Contains(rendered, want) {
@@ -273,7 +274,7 @@ func TestRunForecastAccuracyCommandSkipsPregnancyPausedCycles(t *testing.T) {
 	if document.Completed != 5 || document.Evaluated != 3 || document.Skipped != 1 {
 		t.Fatalf("expected 5 completed / 3 evaluated / 1 skipped, got %+v", document)
 	}
-	paused := document.Cycles[2]
+	paused := document.Cycles[3]
 	if paused.ActualStart != "2026-04-22" || !paused.Skipped || paused.Reason != forecastAccuracySkipPregnancyPause || paused.PredictedStart != "" || paused.ErrorDays != 0 {
 		t.Fatalf("expected the 2026-04-22 cycle skipped for the pause, got %+v", paused)
 	}

@@ -143,6 +143,11 @@ func registerV1APIRoutes(app *fiber.App, handler *Handler) {
 	stats.Get("/overview", handler.OwnerOnly, handler.GetStatsOverview)
 	stats.Get("/cycles", handler.OwnerOnly, handler.GetCycleHistory)
 
+	// Appointment briefing: read-only range report behind the same owner-only
+	// chain as every other /api/v1 read that returns health data.
+	report := v1.Group("/report", handler.AuthRequired)
+	report.Get("", handler.OwnerOnly, handler.GetReport)
+
 	exports := v1.Group("/exports", handler.AuthRequired, handler.OwnerOnly)
 	exports.Get("/summary", handler.ExportSummary)
 	exports.Get("/csv", handler.ExportCSV)

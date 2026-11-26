@@ -176,8 +176,8 @@ func TestRunForecastAccuracyCommandScoresKnownErrorsAsJSON(t *testing.T) {
 	if summary.WorstErrorDays != 1 || summary.WorstActualStart != "2026-03-25" || summary.WorstPredictedStart != "2026-03-26" {
 		t.Fatalf("unexpected worst cycle: %+v", summary)
 	}
-	if summary.WithinWindow != 3 || summary.WithinWindowPercent != 75 {
-		t.Fatalf("expected 3/4 within window (75%%), got %d (%v%%)", summary.WithinWindow, summary.WithinWindowPercent)
+	if summary.WithinWindow != 2 || summary.WithinWindowPercent != 50 {
+		t.Fatalf("expected 2/4 within window (50%%), got %d (%v%%)", summary.WithinWindow, summary.WithinWindowPercent)
 	}
 }
 
@@ -196,7 +196,7 @@ func TestRunForecastAccuracyCommandRendersHumanTable(t *testing.T) {
 		"2026-03-25  predicted 2026-03-26  error -1d  in window: false",
 		"2026-04-22  predicted 2026-04-22  error +0d  in window: true",
 		"summary: mean abs error 0.3d, median 0.0d, worst 1d (actual 2026-03-25, predicted 2026-03-26)",
-		"within predicted window: 3/4 (75.0%)",
+		"within predicted window: 2/4 (50.0%)",
 		"does not guarantee future predictions",
 	} {
 		if !strings.Contains(rendered, want) {

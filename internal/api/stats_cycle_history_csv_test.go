@@ -251,11 +251,19 @@ func TestStatsPageRendersTheCycleHistoryTheAPIPublishes(t *testing.T) {
 		if got := htmlAttr(row, "data-cycle-history-length"); got != fmt.Sprintf("%d", entry.Length) {
 			t.Fatalf("row %d length = %q while the API publishes %d", index, got, entry.Length)
 		}
+		// The source flag is on the cell, so a reader of the markup gets it
+		// beside the day it qualifies.
+		source := findHTMLNodeWithAttr(row, "data-cycle-history-source")
+		if source == nil {
+			t.Fatalf("row %d has no source cell", index)
+		}
 		wantSource := cycleHistoryCSVStatusEstimated
 		if entry.OvulationConfirmed {
 			wantSource = cycleHistoryCSVStatusConfirmed
+		} else if entry.OvulationDate == nil {
+			wantSource = cycleHistoryCSVStatusNone
 		}
-		if got := htmlAttr(row, "data-cycle-history-source"); got != wantSource {
+		if got := htmlAttr(source, "data-cycle-history-source"); got != wantSource {
 			t.Fatalf("row %d source = %q, want %q", index, got, wantSource)
 		}
 		ovulation := findHTMLNodeWithAttr(row, "data-cycle-history-ovulation")
@@ -326,9 +334,13 @@ func TestStatsPageCycleHistorySourceFlagMatchesTheAPIPerRow(t *testing.T) {
 		case entry.OvulationConfirmed:
 			want = "confirmed"
 		case entry.OvulationDate == nil:
-			want = "none"
+			want = cycleHistoryCSVStatusNone
 		}
-		if got := htmlAttr(row, "data-cycle-history-source"); got != want {
+		source := findHTMLNodeWithAttr(row, "data-cycle-history-source")
+		if source == nil {
+			t.Fatalf("row %d has no source cell", index)
+		}
+		if got := htmlAttr(source, "data-cycle-history-source"); got != want {
 			t.Fatalf("row %d source = %q, want %q", index, got, want)
 		}
 		if got := htmlAttr(row, "data-cycle-history-start"); got != entry.StartDate {

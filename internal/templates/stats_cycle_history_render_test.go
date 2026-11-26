@@ -122,7 +122,11 @@ func TestStatsTemplateRendersOneCycleHistoryRowPerEntry(t *testing.T) {
 	for _, want := range []string{
 		"data-stats-cycle-history",
 		`data-cycle-history-export download`,
-		"COL_START COL_END COL_LENGTH COL_OVULATION COL_SOURCE",
+		"<th scope=\"col\">COL_START</th>",
+		"<th scope=\"col\">COL_END</th>",
+		"<th scope=\"col\">COL_LENGTH</th>",
+		"<th scope=\"col\">COL_OVULATION</th>",
+		"<th scope=\"col\">COL_SOURCE</th>",
 		`data-cycle-history-start="2026-01-01" data-cycle-history-length="28"`,
 		"2026-01-01 2026-01-28 28 d 2026-01-14 ESTIMATED",
 		"2026-01-29 2026-02-26 29 d 2026-01-15 CONFIRMED",

@@ -25,6 +25,7 @@ func tryRunCLICommand() (bool, error) {
 		runSummary:          cli.RunSummaryCommand,
 		runTrends:           cli.RunTrendsCommand,
 		runPredict:          cli.RunPredictCommand,
+		runForecastAccuracy: cli.RunForecastAccuracyCommand,
 	})
 }
 
@@ -41,6 +42,7 @@ type cliCommandHandlers struct {
 	runSummary          func(databaseConfig db.Config, args []string) error
 	runTrends           func(databaseConfig db.Config, args []string) error
 	runPredict          func(databaseConfig db.Config, args []string) error
+	runForecastAccuracy func(databaseConfig db.Config, args []string) error
 }
 
 func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (bool, error) {
@@ -73,6 +75,8 @@ func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (b
 		return handleTrendsCommand(args, handlers)
 	case "predict":
 		return handlePredictCommand(args, handlers)
+	case "forecast-accuracy":
+		return handleForecastAccuracyCommand(args, handlers)
 	default:
 		return false, nil
 	}
@@ -270,6 +274,25 @@ func handlePredictCommand(args []string, handlers cliCommandHandlers) (bool, err
 		return true, fmt.Errorf("invalid database config: %w", err)
 	}
 	return true, handlers.runPredict(databaseConfig, args[1:])
+}
+
+// handleForecastAccuracyCommand dispatches `ovumcy forecast-accuracy`: a
+// read-only, no-secret scorecard of how well the cycle prediction has been
+// holding up — every completed cycle scored against the projection the model
+// would have made from the cycles before it. Like `predict`, it needs only
+// the database config — nothing is written and no stored secret is read.
+func handleForecastAccuracyCommand(args []string, handlers cliCommandHandlers) (bool, error) {
+	if len(args) < 2 {
+		return true, fmt.Errorf("usage: ovumcy forecast-accuracy <email> [--id <id>] [--tz <IANA name>] [--json]")
+	}
+	if handlers.runForecastAccuracy == nil {
+		return true, fmt.Errorf("forecast-accuracy handler is required")
+	}
+	databaseConfig, err := resolveDatabaseConfig()
+	if err != nil {
+		return true, fmt.Errorf("invalid database config: %w", err)
+	}
+	return true, handlers.runForecastAccuracy(databaseConfig, args[1:])
 }
 
 func handleWebhookCommand(args []string, handlers cliCommandHandlers) (bool, error) {

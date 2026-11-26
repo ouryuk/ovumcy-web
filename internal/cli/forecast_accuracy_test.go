@@ -80,9 +80,14 @@ func runForecastAccuracyRaw(t *testing.T, databasePath string, args []string) st
 }
 
 // accuracyFixtureStarts is a run of cycles whose lengths the median model
-// predicts with KNOWN errors: 28 / 28 / 27 / 28 days. Every projection is
-// last-start + median-of-recent-lengths, so the per-cycle errors are exactly
-// 0, 0, -1, 0.
+// predicts with KNOWN errors. The shared cycle-history derivation counts a
+// cycle as COMPLETED only once a later start exists (the last start is the
+// open, running cycle), so six starts give five completed cycles, of which
+// the FIRST has no preceding history to train on — four scoreable targets.
+// Their lengths are 28 / 28 / 27 / 28, so every projection (last start +
+// median of the recent lengths, or the 28-day onboarding default when no
+// length has been observed yet) lands on 2026-02-26 / 03-26 / 04-22 / 05-20
+// and the per-cycle errors are exactly 0, -1, 0, 0.
 func accuracyFixtureStarts() []time.Time {
 	return []time.Time{
 		time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
@@ -90,31 +95,55 @@ func accuracyFixtureStarts() []time.Time {
 		time.Date(2026, time.February, 26, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, time.March, 25, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, time.April, 22, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, time.May, 20, 0, 0, 0, 0, time.UTC),
 	}
 }
+
+// accuracyFixtureNow is pinned after every seeded start so the whole fixture
+// is inside the history window.
+var accuracyFixtureNow = time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC)
 
 func TestRunForecastAccuracyCommandScoresKnownErrorsAsJSON(t *testing.T) {
 	databasePath := createCLIUsersDatabase(t)
 	user := seedForecastAccuracyFixture(t, databasePath, accuracyFixtureStarts())
-	pinForecastAccuracyNow(t, time.Date(2026, time.May, 1, 12, 0, 0, 0, time.UTC))
+	pinForecastAccuracyNow(t, accuracyFixtureNow)
 
-	document, _ := runForecastAccuracyForOwner(t, databasePath, []string{"accuracy-owner@example.com", "--json"})
+	document, rendered := runForecastAccuracyForOwner(t, databasePath, []string{"accuracy-owner@example.com", "--json"})
 	if document.Schema != forecastAccuracySchemaVersion {
 		t.Fatalf("expected schema %q, got %q", forecastAccuracySchemaVersion, document.Schema)
 	}
 	if document.User.ID != user.ID || document.User.Email != "accuracy-owner@example.com" {
 		t.Fatalf("unexpected user: %+v", document.User)
 	}
-	if document.Completed != 4 || document.Evaluated != 4 || document.Skipped != 0 {
-		t.Fatalf("expected 4 completed and evaluated cycles, got completed=%d evaluated=%d skipped=%d", document.Completed, document.Evaluated, document.Skipped)
+	if document.Timezone != "UTC" {
+		t.Fatalf("expected timezone UTC, got %q", document.Timezone)
+	}
+	if document.Disclaimer != forecastAccuracyDisclaimer || !strings.Contains(rendered, `"schema": "ovumcy-forecast-accuracy/v1"`) {
+		t.Fatalf("expected the schema tag and disclaimer to travel with the document, got %q", document.Disclaimer)
+	}
+	if document.Completed != 5 || document.Evaluated != 4 || document.Skipped != 0 {
+		t.Fatalf("expected 5 completed and 4 evaluated cycles, got completed=%d evaluated=%d skipped=%d", document.Completed, document.Evaluated, document.Skipped)
 	}
 	if len(document.Cycles) != 4 {
 		t.Fatalf("expected 4 per-cycle rows, got %d", len(document.Cycles))
 	}
 
-	expectedPredicted := []string{"2026-01-29", "2026-02-26", "2026-03-26", "2026-04-22"}
-	expectedActual := []string{"2026-01-29", "2026-02-26", "2026-03-25", "2026-04-22"}
-	expectedErrors := []int{0, 0, -1, 0}
+	expectedPredicted := []string{"2026-02-26", "2026-03-26", "2026-04-22", "2026-05-20"}
+	expectedActual := []string{"2026-02-26", "2026-03-25", "2026-04-22", "2026-05-20"}
+	expectedErrors := []int{0, -1, 0, 0}
+	expectedBasis := []forecastAccuracyBasis{
+		// Only the first cycle's period days precede 2026-02-26: no length has
+		// been observed yet, so the projection rests on the 28-day onboarding
+		// default rather than on a median.
+		{CompletedCycles: 0, MedianCycleLength: 28, PredictedCycleLength: 28},
+		{CompletedCycles: 1, MedianCycleLength: 28, PredictedCycleLength: 28},
+		{CompletedCycles: 2, MedianCycleLength: 28, PredictedCycleLength: 28},
+		{CompletedCycles: 3, MedianCycleLength: 28, PredictedCycleLength: 28},
+	}
+	// Row 0 rested on a default with no observed length range (MinCycleLength
+	// is 0), so no window is credited; row 1's actual start missed the single-
+	// day observed range by a day; rows 2 and 3 hit it.
+	expectedWithin := []bool{false, false, true, true}
 	for index, row := range document.Cycles {
 		if row.ActualStart != expectedActual[index] || row.PredictedStart != expectedPredicted[index] {
 			t.Fatalf("row %d: expected predicted %s vs actual %s, got %s vs %s", index, expectedPredicted[index], expectedActual[index], row.PredictedStart, row.ActualStart)
@@ -122,17 +151,15 @@ func TestRunForecastAccuracyCommandScoresKnownErrorsAsJSON(t *testing.T) {
 		if row.ErrorDays != expectedErrors[index] {
 			t.Fatalf("row %d: expected error %+d, got %+d", index, expectedErrors[index], row.ErrorDays)
 		}
-		if row.Skipped {
+		if row.Skipped || row.Reason != "" {
 			t.Fatalf("row %d: expected an evaluated row, got skipped (%s)", index, row.Reason)
 		}
-		// The model's recent length range collapses to a single day on this
-		// regular history, so only the exact hits land inside the window.
-		if row.WithinWindow != (row.ErrorDays == 0) {
-			t.Fatalf("row %d: expected within_window %t, got %t", index, row.ErrorDays == 0, row.WithinWindow)
+		if row.WithinWindow != expectedWithin[index] {
+			t.Fatalf("row %d: expected within_window %t, got %t", index, expectedWithin[index], row.WithinWindow)
 		}
-	}
-	if document.Cycles[2].Basis.CompletedCycles != 2 || document.Cycles[2].Basis.MedianCycleLength != 28 || document.Cycles[2].Basis.PredictedCycleLength != 28 {
-		t.Fatalf("row 2: unexpected basis: %+v", document.Cycles[2].Basis)
+		if row.Basis != expectedBasis[index] {
+			t.Fatalf("row %d: unexpected basis: %+v", index, row.Basis)
+		}
 	}
 
 	summary := document.Summary
@@ -148,24 +175,27 @@ func TestRunForecastAccuracyCommandScoresKnownErrorsAsJSON(t *testing.T) {
 	if summary.WorstErrorDays != 1 || summary.WorstActualStart != "2026-03-25" || summary.WorstPredictedStart != "2026-03-26" {
 		t.Fatalf("unexpected worst cycle: %+v", summary)
 	}
-	if summary.WithinWindow != 3 || summary.WithinWindowPercent != 75 {
-		t.Fatalf("expected 3/4 within window (75%%), got %d (%v%%)", summary.WithinWindow, summary.WithinWindowPercent)
+	if summary.WithinWindow != 2 || summary.WithinWindowPercent != 50 {
+		t.Fatalf("expected 2/4 within window (50%%), got %d (%v%%)", summary.WithinWindow, summary.WithinWindowPercent)
 	}
 }
 
 func TestRunForecastAccuracyCommandRendersHumanTable(t *testing.T) {
 	databasePath := createCLIUsersDatabase(t)
 	seedForecastAccuracyFixture(t, databasePath, accuracyFixtureStarts())
-	pinForecastAccuracyNow(t, time.Date(2026, time.May, 1, 12, 0, 0, 0, time.UTC))
+	pinForecastAccuracyNow(t, accuracyFixtureNow)
 
-	rendered := runForecastAccuracyRaw(t, databasePath, []string{"accuracy-owner@example.com"})
+	rendered := runForecastAccuracyRaw(t, databasePath, []string{"accuracy-owner@example.com", "--tz", "Europe/Madrid"})
 	for _, want := range []string{
 		"ovumcy forecast-accuracy — accuracy-owner@example.com",
-		"evaluated 4 of 4 completed cycles (0 skipped)",
-		"2026-01-29  predicted 2026-01-29  error +0d  in window: true",
+		"timezone: Europe/Madrid, completed cycles: 5",
+		"evaluated 4 of 5 completed cycles (0 skipped)",
+		"2026-02-26  predicted 2026-02-26  error +0d  in window: false",
 		"2026-03-25  predicted 2026-03-26  error -1d  in window: false",
+		"2026-04-22  predicted 2026-04-22  error +0d  in window: true",
+		"2026-05-20  predicted 2026-05-20  error +0d  in window: true",
 		"summary: mean abs error 0.3d, median 0.0d, worst 1d (actual 2026-03-25, predicted 2026-03-26)",
-		"within predicted window: 3/4 (75.0%)",
+		"within predicted window: 2/4 (50.0%)",
 		"does not guarantee future predictions",
 	} {
 		if !strings.Contains(rendered, want) {
@@ -194,9 +224,9 @@ func TestRunForecastAccuracyCommandWithoutAnyHistory(t *testing.T) {
 
 func TestRunForecastAccuracyCommandWithOneCycleIsInsufficient(t *testing.T) {
 	databasePath := createCLIUsersDatabase(t)
-	// Two observed starts make ONE completed cycle — a single prediction
-	// target with a single training cycle, but the FIRST completed cycle has
-	// nothing before it to train on, so nothing is evaluable.
+	// Two observed starts make ONE completed cycle. It is the first, and the
+	// first completed cycle has nothing before it to train on, so nothing is
+	// evaluable.
 	seedForecastAccuracyFixture(t, databasePath, accuracyFixtureStarts()[:2])
 	pinForecastAccuracyNow(t, time.Date(2026, time.February, 15, 12, 0, 0, 0, time.UTC))
 
@@ -216,11 +246,13 @@ func TestRunForecastAccuracyCommandWithOneCycleIsInsufficient(t *testing.T) {
 func TestRunForecastAccuracyCommandSkipsPregnancyPausedCycles(t *testing.T) {
 	databasePath := createCLIUsersDatabase(t)
 	user := seedForecastAccuracyFixture(t, databasePath, accuracyFixtureStarts())
-	pinForecastAccuracyNow(t, time.Date(2026, time.May, 1, 12, 0, 0, 0, time.UTC))
+	pinForecastAccuracyNow(t, accuracyFixtureNow)
 
 	// A positive test between the fourth and fifth starts, with no cycle
-	// start after it: the model would have paused and projected nothing for
-	// the fifth cycle, so that cycle is reported skipped, not scored 0.
+	// start after it yet at that point: the model would have paused and
+	// projected nothing for the cycle starting 2026-04-22, so that cycle is
+	// reported skipped, not scored 0. The 2026-04-22 start itself lifts the
+	// pause again, so the last cycle is evaluated normally.
 	database, err := db.OpenDatabase(db.Config{Driver: db.DriverSQLite, SQLitePath: databasePath})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -238,29 +270,37 @@ func TestRunForecastAccuracyCommandSkipsPregnancyPausedCycles(t *testing.T) {
 	}
 
 	document, rendered := runForecastAccuracyForOwner(t, databasePath, []string{"accuracy-owner@example.com", "--json"})
-	if document.Completed != 4 || document.Evaluated != 3 || document.Skipped != 1 {
-		t.Fatalf("expected 4 completed / 3 evaluated / 1 skipped, got %+v", document)
+	if document.Completed != 5 || document.Evaluated != 3 || document.Skipped != 1 {
+		t.Fatalf("expected 5 completed / 3 evaluated / 1 skipped, got %+v", document)
 	}
-	last := document.Cycles[len(document.Cycles)-1]
-	if !last.Skipped || last.Reason != forecastAccuracySkipPregnancyPause || last.PredictedStart != "" {
-		t.Fatalf("expected the fifth cycle skipped for the pause, got %+v", last)
+	paused := document.Cycles[2]
+	if paused.ActualStart != "2026-04-22" || !paused.Skipped || paused.Reason != forecastAccuracySkipPregnancyPause || paused.PredictedStart != "" || paused.ErrorDays != 0 {
+		t.Fatalf("expected the 2026-04-22 cycle skipped for the pause, got %+v", paused)
 	}
-	if !strings.Contains(rendered, "skipped (pregnancy pause active)") {
-		t.Fatalf("expected the skip reason in the table, got:\n%s", rendered)
+	if !strings.Contains(rendered, `"reason": "pregnancy pause active"`) {
+		t.Fatalf("expected the skip reason in JSON, got:\n%s", rendered)
 	}
 	if document.Summary.PredictionsTotal != 3 {
-		t.Fatalf("expected the summary to count only evaluated rows, got %d", document.Summary.PredictionsTotal)
+		t.Fatalf("expected the summary to count only evaluated rows, got %+v", document.Summary)
+	}
+
+	table := runForecastAccuracyRaw(t, databasePath, []string{"accuracy-owner@example.com"})
+	if !strings.Contains(table, "2026-04-22  skipped (pregnancy pause active)") || !strings.Contains(table, "evaluated 3 of 5 completed cycles (1 skipped)") {
+		t.Fatalf("expected the skipped row in the table, got:\n%s", table)
 	}
 }
 
 func TestRunForecastAccuracyCommandAcceptsIDAndRejectsBadInput(t *testing.T) {
 	databasePath := createCLIUsersDatabase(t)
 	user := seedForecastAccuracyFixture(t, databasePath, accuracyFixtureStarts())
-	pinForecastAccuracyNow(t, time.Date(2026, time.May, 1, 12, 0, 0, 0, time.UTC))
+	pinForecastAccuracyNow(t, accuracyFixtureNow)
 
 	document, _ := runForecastAccuracyForOwner(t, databasePath, []string{"--id", strconv.FormatUint(uint64(user.ID), 10), "--json"})
 	if document.User.ID != user.ID {
 		t.Fatalf("expected the --id target, got %+v", document.User)
+	}
+	if document.Evaluated != 4 {
+		t.Fatalf("expected 4 evaluated cycles, got %d", document.Evaluated)
 	}
 
 	if _, err := parseForecastAccuracyArgs([]string{}); err == nil {
@@ -277,6 +317,9 @@ func TestRunForecastAccuracyCommandAcceptsIDAndRejectsBadInput(t *testing.T) {
 	}
 	if _, err := parseForecastAccuracyArgs([]string{"a@example.com", "b@example.com"}); err == nil {
 		t.Fatalf("expected usage error for a second positional")
+	}
+	if _, err := parseForecastAccuracyArgs([]string{"a@example.com", "--json=1"}); err == nil {
+		t.Fatalf("expected usage error for --json with a value")
 	}
 	opts, err := parseForecastAccuracyArgs([]string{"--id=7", "--tz=UTC", "--json"})
 	if err != nil || opts.userID != 7 || !opts.asJSON || opts.tz != "UTC" {

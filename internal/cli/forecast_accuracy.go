@@ -448,12 +448,12 @@ func renderForecastAccuracyTable(document ForecastAccuracyDocument) string {
 	fmt.Fprintf(&builder, "timezone: %s, completed cycles: %d\n", document.Timezone, document.Completed)
 	if document.Completed == 0 {
 		builder.WriteString("no cycle history: accuracy cannot be measured yet\n")
-		builder.WriteString(fmt.Sprintf("%s\n", document.Disclaimer))
+		fmt.Fprintf(&builder, "%s\n", document.Disclaimer)
 		return builder.String()
 	}
 	if document.Evaluated == 0 {
 		builder.WriteString("not enough completed cycles with a usable projection: accuracy cannot be measured yet\n")
-		builder.WriteString(fmt.Sprintf("%s\n", document.Disclaimer))
+		fmt.Fprintf(&builder, "%s\n", document.Disclaimer)
 		return builder.String()
 	}
 

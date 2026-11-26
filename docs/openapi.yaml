@@ -2114,14 +2114,37 @@ paths:
         length and the owner's luteal phase (`ovulation_estimated: true`). The
         two flags are mutually exclusive and both false when the date is null
         because the cycle is too short for either source to place one.
+
+        `?format=csv` returns the same entries as a CSV attachment (one row per
+        cycle, header `start_date,end_date,length_days,ovulation_date,ovulation_source`).
+        Dates stay `YYYY-MM-DD`; `ovulation_source` is `confirmed`, `estimated`
+        or `none`, and an unplaced ovulation is an empty cell. The column
+        names are fixed English, like the account export, so a file reads the
+        same in any session language. It is audited as `data.export` egress
+        with `export_format="stats_cycles"`.
+      parameters:
+        - name: format
+          in: query
+          required: false
+          description: Response format; omitted or `json` is the JSON array.
+          schema:
+            type: string
+            enum: [json, csv]
       responses:
         '200':
           description: Cycle history payload, oldest cycle first.
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: Present on the CSV variant only.
+              example: 'attachment; filename=ovumcy-cycle-history-2026-05-17.csv'
           content:
             application/json:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/CycleHistoryEntry' }
+            text/csv:
+              schema: { type: string }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '429': { $ref: '#/components/responses/RateLimited' }

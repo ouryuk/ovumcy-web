@@ -143,16 +143,22 @@ The full `go test ./...` suite was not run; the two affected package trees above
 were run and pass. `go test ./internal/api/...` is the slower half (~13 min on
 this host).
 
+## Shipped since the prototype
+
+1. **The list renders on `/stats`.** A "Cycle history" section in
+   `internal/templates/stats.html` (server-rendered, same i18n pattern as the
+   rest of the page) shows a table of completed cycles — start, end, length,
+   ovulation date and whether that day was confirmed by temperature, estimated,
+   or not placed — with an empty state when there are no completed cycles. It
+   is fed by the same `BuildCycleHistory` result, so the page and the API
+   cannot drift on the per-cycle definition.
+2. **Per-cycle CSV export.** `GET /api/v1/stats/cycles?format=csv` returns the
+   same DTO entries as a CSV attachment (one row per cycle, same columns as
+   the table), owner-scoped by the existing middleware and audited as
+   `data.export` egress with `export_format="stats_cycles"`.
+
 ## Next steps
 
-1. **Render the list on `/stats`.** Add a "cycle history" section to
-   `internal/templates/stats.html`, fed by the same
-   `BuildCycleHistory` result. The API exists so the page and external clients
-   cannot drift on the per-cycle definition. This is explicitly out of scope for
-   the prototype.
-2. **Per-cycle CSV export.** Add a CSV variant of the history (one row per
-   cycle) for journals and clinician hand-off, reusing the DTO fields rather
-   than re-deriving them.
-3. **Cycle-comparison view.** Compare cycles side by side — length, ovulation
+1. **Cycle-comparison view.** Compare cycles side by side — length, ovulation
    day, period length, logged symptoms — using the same entries as the single
    source of truth.

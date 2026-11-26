@@ -534,6 +534,57 @@
   {{end}}
 
   {{if .IsOwner}}
+    {{/* The per-cycle list. Every row is a BuildCycleHistory entry — the same
+         one GET /api/v1/stats/cycles and its ?format=csv download publish — so
+         this table, the API and the spreadsheet cannot disagree about which
+         cycles exist or how their ovulation day was found. It renders in both
+         page states, because one completed cycle is already a history even
+         while the rest of the page still asks for a second. */}}
+    <section class="card p-4 sm:p-5 space-y-4 reveal" data-stats-cycle-history>
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="journal-subtitle">{{t .Messages "stats.cycle_history_title"}}</h2>
+          <p class="journal-muted mt-1 text-sm">{{t .Messages "stats.cycle_history_subtitle"}}</p>
+        </div>
+        {{if .HasCycleHistory}}
+        <a class="text-sm" href="/api/v1/stats/cycles?format=csv" data-cycle-history-export download>{{t .Messages "stats.cycle_history_export"}}</a>
+        {{end}}
+      </div>
+      {{if .HasCycleHistory}}
+      <div class="chart-table-scroll">
+        <table class="chart-table" data-cycle-history-table>
+          <thead>
+            <tr>
+              <th scope="col">{{t .Messages "stats.cycle_history_start"}}</th>
+              <th scope="col">{{t .Messages "stats.cycle_history_end"}}</th>
+              <th scope="col">{{t .Messages "stats.cycle_history_length"}}</th>
+              <th scope="col">{{t .Messages "stats.cycle_history_ovulation"}}</th>
+              <th scope="col">{{t .Messages "stats.cycle_history_source"}}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .CycleHistory}}
+            <tr data-cycle-history-row data-cycle-history-start="{{.Start.Format "2006-01-02"}}" data-cycle-history-length="{{.Length}}">
+              <td>{{formatLocalizedDate $.Lang .Start "display"}}</td>
+              <td>{{formatLocalizedDate $.Lang .End "display"}}</td>
+              <td>{{.Length}} {{t $.Messages "common.days_short"}}</td>
+              <td data-cycle-history-ovulation>{{if .OvulationDate.IsZero}}{{t $.Messages "stats.cycle_history_none"}}{{else}}{{formatLocalizedDate $.Lang .OvulationDate "display"}}{{end}}</td>
+              <td data-cycle-history-source="{{if .OvulationConfirmed}}confirmed{{else if .OvulationEstimated}}estimated{{else}}none{{end}}">{{if .OvulationConfirmed}}{{t $.Messages "stats.cycle_history_confirmed"}}{{else if .OvulationEstimated}}{{t $.Messages "stats.cycle_history_estimated"}}{{else}}{{t $.Messages "stats.cycle_history_source_none"}}{{end}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="stats-empty-state" data-cycle-history-empty>
+        <span class="stats-empty-icon" aria-hidden="true">{{template "icon" "document"}}</span>
+        <p class="journal-muted text-sm">{{t .Messages "stats.cycle_history_empty"}}</p>
+      </div>
+      {{end}}
+    </section>
+  {{end}}
+
+  {{if .IsOwner}}
   <p class="journal-muted text-sm" data-stats-prediction-disclaimer>{{t .Messages "medical.disclaimer"}}</p>
   {{end}}
 </section>

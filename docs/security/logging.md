@@ -38,7 +38,7 @@ Ovumcy does **not** emit per-action audit logs by default. The `AUDIT_LOG_ENABLE
 
   | Action | `target` | Emitted when |
   | --- | --- | --- |
-  | `data.export` | `account_data` | A CSV, JSON or summary export is served, refused, or fails. `export_format` (`csv` / `json` / `summary`) is on **every** outcome, including a request refused before any data is read, so a rejected download is still attributable to the format that was asked for. |
+  | `data.export` | `account_data` | A CSV, JSON or summary export is served, refused, or fails. `export_format` (`csv` / `json` / `summary`, and `stats_cycles` for the per-cycle CSV at `GET /api/v1/stats/cycles?format=csv`) is on **every** outcome, including a request refused before any data is read, so a rejected download is still attributable to the format that was asked for. |
   | `settings.calendar_feed_reveal` | `calendar_feed` | The one-time page shows the `.ics` subscribe URL. |
   | `auth.recovery_code_reveal` | `recovery_code` | A recovery code is displayed — on the dedicated page or in the register page's inline block; the sanitized `path` distinguishes the two. |
 

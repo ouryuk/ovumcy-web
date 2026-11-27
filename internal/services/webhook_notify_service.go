@@ -455,7 +455,7 @@ func (service *WebhookNotifyService) processOwner(
 	case len(due) == 0:
 		// The decision emits nothing either because the medical-safety gate
 		// suppressed predictions for this owner or because no reminder is inside the
-		// lead window (and, when every candidate was witheld by its own watermark,
+		// lead window (and, when every candidate was withheld by its own watermark,
 		// because it was already sent). Decide which by asking the suppression
 		// predicate the decision itself consults — never a second prediction pass.
 		if suppression := ResolvePredictionSuppression(&user, BuildCycleStatsFromLogs(&user, dayLogs, now, ownerLocation)); suppression.PredictionsSuppressed {

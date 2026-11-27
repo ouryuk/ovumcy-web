@@ -1,60 +1,108 @@
-# Task report: `ovumcy predict` — a read-only next-cycle-window CLI
+# Proposal: `ovumcy notify --preflight` — why an owner's reminders are (not) arriving
 
 ## Why
 
-The dashboard, the calendar feed and the webhook notify pass already project each owner's next
-period start, ovulation date and fertile window — but only behind a login. The repo's recent
-scout additions (summary, trends, export) built a shell-side, read-only family of operator
-commands, and the one analytics gap left open was exactly the suggestion in the scout brief:
-a **predictive next-cycle window** was still missing. An operator (or a monitoring script) had
-no way to answer "what is this account's projected window as of today?" without opening the
-browser app or reverse-engineering the derivation. There is no roadmap/TODO naming an unstarted
-item, so this gap is taken as the prototype, in the same style as `feat-cli-trends-phase-analytics`.
+The shipped pass (`internal/services/webhook_notify_service.go` `RunOnce`) reports only
+aggregates: owners scanned, due, sent, failed, and `OwnerIDsFailed`. Its per-owner detail is
+host-only `log.Printf` lines (`decrypt failed, skipping owner id=N`, `load logs failed`, and the
+deliverer's `reason=… host=…`). Everything that keeps an owner silent *without* failing — delivery
+disabled, no endpoint, no reminder kind, predictions suppressed, already sent, not due — writes
+no line at all, and a disabled or unreadable owner never reaches the deliverer, so a real pass
+counts them as nothing.
+
+The consequence is the operator's actual question: "reminders stopped for this owner — why?" The
+answer exists inside the pass but only as aggregate counters plus a log to grep for an id. A
+diagnostic that *only* walked the happy path could not answer it either: the interesting owners
+are precisely the ones a `--dry-run` preview omits (the preview is a catalogue of what would be
+sent). So the seam had to live inside the pass's own branches.
 
 ## What
 
-- New read-only CLI subcommand: `ovumcy predict <email> [--id <id>] [--tz <IANA name>] [--json]`.
-- Human table, or a versioned `ovumcy-predict/v1` JSON document, reporting:
-  - where the owner stands today: cycle day, phase, fertility status, pregnancy pause;
-  - the **basis** the projection was computed from — completed cycles, average/median/predicted
-    cycle length, predicted period length, personalised luteal phase — so an operator can judge
-    how much to trust the numbers (twenty observed cycles are not an onboarding default);
-  - the projection: last period start, next period start, ovulation date (+ `ovulation_exact`
-    clamp flag), six-day fertile window;
-  - the projection disclaimer in every rendering — script and human can never disagree about it.
-- Explicit degradation: a pregnancy pause prints "predictions are suppressed"; an owner with no
-  cycle history prints "nothing can be projected yet" instead of an empty document.
+**1. A per-owner outcome on the pass (`internal/services/webhook_notify_preflight.go`).**
 
-## How
+Each branch `processOwner` already takes now also writes a `PreflightOutcome` — owner id,
+destination **host only**, due count, a stable reason key, an optional detail, and whether the
+operator can fix it — to a **per-pass recorder** (`*preflightRecorder`) passed into the walk.
+The recorder is nil for a normal `RunOnce`, so nothing about delivery, claims, marks, watermarks,
+counters, or the existing log lines changes; the recorder is per-call, so the service stays
+stateless and two concurrent walks cannot see each other's outcomes.
 
-- `internal/cli/predict.go` — argument parsing mirrors `trends.go` exactly (same email/id
-  vocabulary via `resolveOperatorUser`, same `--flag value` / `--flag=value` forms, single usage
-  string). All numbers come from the existing `services.BuildCycleStatsFromLogs` — the exact
-  derivation the dashboard uses — so the CLI cannot drift from what the owner sees. The full
-  `models.User` row is re-fetched because the luteal/baseline pass consumes the onboarding
-  fields the operator summary does not carry.
-- Date rendering uses `CalendarDayKey` semantics (value's own calendar components): the baseline
-  anchors carry request-location wall clocks, and a `UTC()` conversion would shift the printed
-  day by one for non-UTC `--tz` — caught by the `Europe/Madrid` test.
-- `cmd/ovumcy/commands.go` — `predict` dispatch wired like `summary`/`trends` (database config
-  only; no secret is read; nothing is written).
-- Tests `internal/cli/predict_test.go`: seeded 28-day fixture pinned to 2026-03-27 (day 3 of a
-  live cycle) asserts the full JSON projection (next period 2026-04-22, ovulation 2026-04-07,
-  fertile window 2026-04-02→04-07, basis 3 cycles / median 28), the human table, `--id` +
-  `--tz` handling and the bad-arg contract, the no-history path, and pregnancy-pause
-  suppression. Clock pinning goes through the `predictNow` variable, mirroring `summaryNow`.
-- Changelog fragment `changelog.d/feat-cli-predict-next-cycle-window.md`.
-- Verified locally per CLAUDE.md: `gofmt -l` clean, `go vet ./cmd/... ./internal/... ./web/...`
-  clean, `go build ./...` clean; scoped tests run for the two touched packages
-  (`internal/cli` predict tests + full `cmd/ovumcy` suite) pass. Full Go suite is CI-gated
-  (ccb751bb). Internal `internal/cli/zz_idzero_test.go` left untouched.
+Reason enum (published contract, `omumcy-notify-preflight/v1`):
+
+| key | meaning | actionable |
+| --- | --- | --- |
+| `ok` | a reminder is due and would be delivered (`due` = how many) | no |
+| `delivery_disabled` | the master switch is off | no (owner's choice) |
+| `no_endpoint` | enabled, but no endpoint stored | no (owner's choice) |
+| `endpoint_unreadable` | ciphertext cannot be opened (SECRET_KEY rotation) | **yes** |
+| `endpoint_invalid` | unparseable / non-http(s) / hostless authority | **yes** |
+| `private_address_blocked` | private literal + `WEBHOOK_BLOCK_PRIVATE_ADDRESSES` | no (policy) |
+| `logs_unreadable` | the decision could not run | **yes** |
+| `predictions_suppressed` | unpredictability mode / pregnancy pause / overdue cycle | no (by design) |
+| `no_reminder_kind` | both reminder switches off | no (owner's choice) |
+| `already_sent` | this cycle's watermark covers it | no |
+| `not_due` | nothing inside the lead window | no |
+| `delivery_failed` | only a real pass; `detail` = `transport_error` / `redirect_refused` / `non_2xx` / `scheme_not_allowed` / `private_address_blocked` / `claim_error` | **yes** |
+| `claim_lost` | only a real pass; concurrent pass or revoke mid-pass | no |
+
+**Precedence** when several blocks apply — first match wins: master switch → missing endpoint →
+unreadable endpoint → endpoint shape/egress gate → unreadable logs → cycle state
+(`no_reminder_kind`, `predictions_suppressed`, `already_sent`, `not_due`) → `ok` → (real pass only)
+`delivery_failed` / `claim_lost`. Rationale: a structural block (can't decrypt, can't reach) is the
+defect worth fixing regardless of cycle state, so it outranks "nothing due"; a would-send verdict
+outranks a structural one only where a request would actually be attempted. `due` is always the
+decision's own count, so a blocked owner still shows how many reminders are waiting.
+
+**Design call — reuse the dry-run path or walk separately?** A **dedicated read-only walk that
+reuses the same `run`**: `NotifyPreflight` calls `service.run(..., dryRun=true, recorder)` — the
+exact traversal, decision and preview a `--dry-run` runs — rather than a parallel implementation
+or a second pass over the report. The only extra work is resolving the suppression reason for
+owners with nothing due (`BuildCycleStatsFromLogs`, pure and repository-free, and only on that
+branch). A delivery pass pays nothing because no recorder is attached. This is why the diagnostic
+cannot drift from what a pass decides.
+
+**2. `ovumcy notify --preflight [--owner <id>] [--json]` (`internal/cli/notify_preflight.go`).**
+Table: `OWNER | HOST | DUE | REASON | NEXT ACTION`, then "N owner(s) need attention". JSON:
+`ovumcy-notify-preflight/v1` with `schema`, `generated_at`, `owners_scanned`, `owner`/`matched`
+(only when filtered), and `owners[]` of `owner_id`, `host`, `due`, `reason`, `detail` (omitted when
+empty), `actionable`, `next_action`. `--owner` narrows the *printed* rows only; the walk always
+covers everyone; an unmatched filter is an **error**, never an empty healthy table. `--preflight`
+with `--fail-on-delivery-error`, or `--json`/`--owner` without `--preflight`, is a usage error.
+
+**Secret discipline:** neither rendering carries a URL, path, query, userinfo, token, ciphertext,
+response body, reminder type, or estimated date — so unlike `--dry-run --show-health-details`, both
+are safe in an operator log. Host comes from the existing `hostOnly`, the package's single
+implementation of that rule.
+
+**3. Operator surfaces:** `docs/notifications.md` gains a `--preflight` subsection (usage, sample
+output, the reason table, the precedence rule, the no-DNS caveat, the flag pairings);
+`docs/SECURITY_INVARIANTS.md` names the preflight's output line beside the existing notify bullet;
+`docs/self-hosted.md`'s SECRET_KEY-rotation guidance now points at the preflight as the place the
+pass names the cause; `changelog.d/feat-cli-notify-preflight.md`.
+
+## How (tests)
+
+- `internal/services/webhook_notify_preflight_test.go` — a table with one case per reason key
+  (reason, host, due, actionable together), the endpoint-shape table and delivery-key table, the
+  delivery-failure-overwrites-ok case with the recorder attached (counters unchanged), per-owner
+  row ordering, a concurrent-walk statelessness check, and a leak guard proving userinfo/query/
+  port/path never reach the outcome.
+- `internal/cli/notify_test.go` — flag contract (`--owner <id>` / `--owner=<id>`, refused pairings),
+  table rendering (no scheme, token, date or reminder type), JSON wire shape decoded into a map so
+  the assertion is about the document not the struct, the owner filter, an advice-table guard that
+  keeps "Act now"/"Nothing to do" in step with `Actionable`, and a zero-owner end-to-end run through
+  the real wiring.
 
 ## Next steps
 
-- If the prototype is adopted, consider surfacing `IsIrregularCycleSpread` (already computed in
-  services) as a `cycle_basis.irregular` field so scripts can gate trust programmatically.
-- A `--days N` horizon (project N cycles forward via `appendPredictedCycles`-style stepping)
-  would extend this without any new derivation.
-- The summary/trends/predict commands share an argument-parsing shape now in three copies; a
-  shared `operatorTargetArgs` helper would be a small, safe follow-up refactor (deliberately not
-  done here — additive only).
+- **A preflight of the scheduled pass from the server process**: the built-in scheduler
+  (`internal/reminders`) drives `RunOnce`; attaching a recorder there and logging one line per
+  actionable owner would put the same verdict in the journal without a shell.
+- **Resolve-and-check at preflight time, optionally**: `private_address_blocked` today reports only
+  IP-literal targets (no DNS in a diagnostic). A `--resolve` opt-in could reuse the guarded dialer's
+  classifier so a private *hostname* is reported before the pass runs.
+- **`--owner <email>`**: needs the operator user lookup; deliberately absent so the diagnostic reads
+  nothing beyond the notify projection.
+- **Out of scope, unchanged**: the hard-kill-between-claim-and-release caveat in
+  `docs/notifications.md` still needs the schema decision it describes; the preflight deliberately
+  makes no claim, so it neither depends on nor works around it.

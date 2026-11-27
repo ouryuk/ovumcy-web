@@ -602,7 +602,6 @@ func TestRunNotifyPreflightOwnerFilter(t *testing.T) {
 	}
 }
 
-
 // TestNotifyPreflightNextActionCoversEveryReason keeps the operator-facing advice
 // table in step with the reason enum: a new reason key without a sentence would
 // render as "unknown reason" and fail here instead.

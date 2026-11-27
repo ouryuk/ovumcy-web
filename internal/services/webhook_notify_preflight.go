@@ -227,8 +227,8 @@ func (service *WebhookNotifyService) NotifyPreflight(ctx context.Context, now ti
 // "would send" and then hits a real delivery failure (only a delivery pass can)
 // reports the outcome that matters rather than the optimistic one.
 type preflightRecorder struct {
-	outcomes   []PreflightOutcome
-	byOwner    map[uint]int
+	outcomes []PreflightOutcome
+	byOwner  map[uint]int
 }
 
 // record stores the outcome for outcome.OwnerID, replacing any earlier entry for

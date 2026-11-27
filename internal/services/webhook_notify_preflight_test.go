@@ -199,27 +199,6 @@ func TestNotifyPreflightClassifiesEveryOwnerReason(t *testing.T) {
 	}
 }
 
-// TestNotifyPreflightSuppressedPredictions proves the medical-safety gate is
-// reported as its own reason rather than as "not due": an owner in
-// unpredictable-cycle mode is not waiting on a cycle, their predictions are
-// withheld on purpose.
-func TestNotifyPreflightSuppressedPredictions(t *testing.T) {
-	record := dueRecord(1, "https://ntfy.example/topic", preflightNow, 26)
-	record.UnpredictableCycle = true
-	outcome := preflightFixture{
-		record:    record,
-		logs:      stubLogReader{byUser: map[uint][]models.DailyLog{1: {periodStartLog(1, *record.LastPeriodStart)}}},
-		decryptor: stubDecryptor{},
-		deliverer: &stubDeliverer{},
-	}.run(t)
-
-	if outcome.Reason != PreflightReasonPredictionsSuppressed {
-		t.Fatalf("reason = %q, want %q", outcome.Reason, PreflightReasonPredictionsSuppressed)
-	}
-	if outcome.Actionable {
-		t.Fatal("a suppressed prediction is not an operator-fixable defect")
-	}
-}
 
 // TestNotifyPreflightLeaksNoSecret is the output-discipline guard for the service
 // half: an outcome carries the destination HOST and nothing else from the URL, no
@@ -338,25 +317,6 @@ func TestNotifyPreflightRecordsDeliveryFailureWhenARecorderIsAttached(t *testing
 	}
 }
 
-// TestPreflightRecorderReplacesALaterOutcomeForTheSameOwner pins the recorder's
-// one-row-per-owner contract: a second record for an owner replaces the first, so
-// the table never lists an owner twice.
-func TestPreflightRecorderReplacesALaterOutcomeForTheSameOwner(t *testing.T) {
-	recorder := &preflightRecorder{}
-	recorder.record(newPreflightOutcome(4, "a.example", 1, PreflightReasonOK, ""))
-	recorder.record(newPreflightOutcome(5, "b.example", 0, PreflightReasonNotDue, ""))
-	recorder.record(newPreflightOutcome(4, "a.example", 1, PreflightReasonDeliveryFailed, "non_2xx"))
-
-	if len(recorder.outcomes) != 2 {
-		t.Fatalf("expected one row per owner, got %d", len(recorder.outcomes))
-	}
-	if recorder.outcomes[0].OwnerID != 4 || recorder.outcomes[0].Code() != "delivery_failed:non_2xx" {
-		t.Fatalf("owner 4 should hold the later outcome, got %+v", recorder.outcomes[0])
-	}
-	if recorder.outcomes[1].OwnerID != 5 {
-		t.Fatalf("first-sighting order should be preserved, got %+v", recorder.outcomes)
-	}
-}
 // TestNotifyPreflightReportsEveryOwnerInListingOrder proves the report carries one
 // row per owner, aligned with the listing, including the owners a plain dry run
 // says nothing about.

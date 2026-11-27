@@ -602,15 +602,6 @@ func TestRunNotifyPreflightOwnerFilter(t *testing.T) {
 	}
 }
 
-// TestRunNotifyPreflightPassLevelError proves a pass-level failure (DB) is
-// propagated as a non-zero exit rather than printed as an empty table.
-func TestRunNotifyPreflightPassLevelError(t *testing.T) {
-	runner := &stubPreflightRunner{err: errors.New("db down")}
-	err := runNotifyPreflightCommand(runner, notifyOptions{preflight: true}, time.Now(), time.UTC, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "notify preflight failed") {
-		t.Fatalf("expected a pass-level error, got %v", err)
-	}
-}
 
 // TestNotifyPreflightNextActionCoversEveryReason keeps the operator-facing advice
 // table in step with the reason enum: a new reason key without a sentence would

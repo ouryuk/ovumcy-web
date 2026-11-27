@@ -223,7 +223,7 @@ func handleExportCommand(args []string, handlers cliCommandHandlers) (bool, erro
 // stored secret is read.
 func handleSummaryCommand(args []string, handlers cliCommandHandlers) (bool, error) {
 	if len(args) < 2 {
-		return true, fmt.Errorf("usage: ovumcy summary <email> [--id <id>] [--days 7|30|90] [--json]")
+		return true, fmt.Errorf("usage: ovumcy summary <email> [--id <id>] [--days 7|30|90] [--tz <IANA name>] [--json]")
 	}
 	if handlers.runSummary == nil {
 		return true, fmt.Errorf("summary handler is required")

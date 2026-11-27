@@ -324,7 +324,6 @@ func TestRunSummaryCommandArgumentErrorsExtended(t *testing.T) {
 		{"--days", "0"},  // outside the accepted windows
 		{"--days", "-7"}, // negative window
 		{"--days=90x"},   // equals form, non-numeric
-		{"--id", "0"},    // id 0 means "not given" → no target at all
 		{"--id=abc"},     // equals form, non-numeric
 	} {
 		var output bytes.Buffer
@@ -332,6 +331,15 @@ func TestRunSummaryCommandArgumentErrorsExtended(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "usage: ovumcy summary") {
 			t.Fatalf("expected usage error for %v, got %v", args, err)
 		}
+	}
+
+	// --id 0 is NOT a usage error: the flag was typed correctly and the value
+	// is the mistake, so it gets its own message (and never falls through to
+	// an email, see TestReadOnlyCommandsRefuseAnExplicitIDZero).
+	var zeroIDOutput bytes.Buffer
+	err := runSummaryCommand(config, []string{"--id", "0"}, &zeroIDOutput)
+	if err == nil || !strings.Contains(err.Error(), "positive account id") {
+		t.Fatalf("expected the non-positive-id message for --id 0, got %v", err)
 	}
 
 	// A display-name address is refused up front, before any database work.

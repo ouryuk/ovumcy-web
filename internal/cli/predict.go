@@ -17,7 +17,8 @@ import (
 )
 
 // predictUsage is the single usage string returned for every argument error so
-// the contract is stable and testable, mirroring trendsUsage.
+// the contract is stable and testable, mirroring trendsUsage. --tz is described
+// as overriding the owner's stored zone because that is what it now does.
 const predictUsage = "usage: ovumcy predict <email> [--id <id>] [--tz <IANA name>] [--json]"
 
 // predictSchemaVersion tags the --json payload so a consumer can detect which
@@ -30,9 +31,16 @@ const predictSchemaVersion = "ovumcy-predict/v1"
 // their own copy; this command says it here.
 const predictDisclaimer = "these dates are projections from past cycles, not guarantees"
 
-// predictNow resolves "today" for the projection anchor. It is a variable so
-// tests can pin the clock; production callers never touch it.
-var predictNow = func() time.Time { return time.Now().UTC() }
+// predictNow resolves the instant the projection is anchored at. It is a
+// variable so tests can pin the clock; production callers never touch it.
+//
+// It returns the INSTANT, and the command resolves "today" from it through the
+// OWNER's zone (resolveOperatorLocation): taking time.Now().UTC() as the anchor
+// itself made the command answer for the server's calendar day, so an owner in
+// America/Chicago was projected from the previous day every evening after 18:00
+// CST — a cycle day, and near a cycle boundary a whole phase, behind what the
+// dashboard showed for the same account at the same instant.
+var predictNow = func() time.Time { return time.Now() }
 
 // predictOptions holds the parsed `ovumcy predict` arguments. The email/id
 // pair is resolved with the same vocabulary as `export` and `summary`
@@ -40,7 +48,12 @@ var predictNow = func() time.Time { return time.Now().UTC() }
 type predictOptions struct {
 	userID uint
 	email  string
+	// tz is the --tz override; tzSet records that it was given. Without the
+	// second field an omitted --tz and an explicit `--tz UTC` would be
+	// indistinguishable, and the command could not tell "use the owner's zone"
+	// from "the operator asked for UTC on purpose".
 	tz     string
+	tzSet  bool
 	asJSON bool
 }
 
@@ -124,7 +137,8 @@ func runPredictCommand(databaseConfig db.Config, args []string, output io.Writer
 		return err
 	}
 
-	database, err := db.OpenDatabase(databaseConfig)
+	// Read-only: `predict` projects from the owner's logs and never writes.
+	database, err := openCLIDatabase(databaseConfig, true)
 	if err != nil {
 		return fmt.Errorf("database init failed: %w", err)
 	}
@@ -164,17 +178,21 @@ func runPredictCommand(databaseConfig db.Config, args []string, output io.Writer
 		return fmt.Errorf("predict daily logs: %w", err)
 	}
 
-	location, err := time.LoadLocation(opts.tz)
-	if err != nil {
-		return errors.New(predictUsage)
+	// The owner's persisted zone is the default; --tz overrides it for the
+	// invocation. Both resolve through resolveOperatorLocation, so an absent or
+	// unusable stored zone degrades to UTC instead of to the server's own zone.
+	timezoneName := opts.tz
+	if !opts.tzSet {
+		_, timezoneName = resolveOperatorLocation(user.Timezone)
 	}
+	location, timezoneName := resolveOperatorLocation(timezoneName)
 	now := predictNow()
 
 	// Package-level, not a method: the derivation consults no repositories,
 	// so the CLI cannot drift from what the dashboard shows for the same
 	// account at the same instant.
 	stats := services.BuildCycleStatsFromLogs(&user, logs, now, location)
-	document := buildPredictDocument(summary, opts.tz, now, stats)
+	document := buildPredictDocument(summary, timezoneName, now, stats)
 
 	if output == nil {
 		output = os.Stdout
@@ -185,10 +203,14 @@ func runPredictCommand(databaseConfig db.Config, args []string, output io.Writer
 			return fmt.Errorf("render predict: %w", err)
 		}
 		payload = append(payload, '\n')
-		_, _ = output.Write(payload)
+		if _, err := output.Write(payload); err != nil {
+			return fmt.Errorf("write predict: %w", err)
+		}
 		return nil
 	}
-	_, _ = io.WriteString(output, renderPredictTable(document))
+	if _, err := io.WriteString(output, renderPredictTable(document)); err != nil {
+		return fmt.Errorf("write predict: %w", err)
+	}
 	return nil
 }
 
@@ -198,7 +220,7 @@ func runPredictCommand(databaseConfig db.Config, args []string, output io.Writer
 // resolve to a location time.LoadLocation accepts; a second positional, an
 // unknown flag or a bad --tz returns predictUsage.
 func parsePredictArgs(args []string) (predictOptions, error) {
-	opts := predictOptions{tz: "UTC"}
+	opts := predictOptions{}
 	for index := 0; index < len(args); index++ {
 		arg := strings.TrimSpace(args[index])
 		if arg == "" {
@@ -236,16 +258,17 @@ func parsePredictArgs(args []string) (predictOptions, error) {
 
 		switch name {
 		case "id":
-			parsed, err := strconv.ParseUint(value, 10, 64)
+			parsed, err := parseOperatorUserID(value)
 			if err != nil {
-				return predictOptions{}, errors.New(predictUsage)
+				return predictOptions{}, predictIDError(value)
 			}
-			opts.userID = uint(parsed)
+			opts.userID = parsed
 		case "tz":
 			if _, err := time.LoadLocation(value); err != nil {
 				return predictOptions{}, errors.New(predictUsage)
 			}
 			opts.tz = value
+			opts.tzSet = true
 		case "json":
 			return predictOptions{}, errors.New(predictUsage)
 		default:
@@ -253,10 +276,22 @@ func parsePredictArgs(args []string) (predictOptions, error) {
 		}
 	}
 
-	if opts.email == "" && opts.userID == 0 {
+	if opts.email == "" && !operatorUserIDSelected(opts.userID) {
 		return predictOptions{}, errors.New(predictUsage)
 	}
 	return opts, nil
+}
+
+// predictIDError keeps the non-positive --id message apart from the usage
+// string, exactly as export does: the flag was typed correctly and the VALUE is
+// the mistake, so the operator has to be told what was wrong with it rather than
+// handed the synopsis again. Treating the id as unset is what used to let
+// `--id 0 <email>` project a different account than the one addressed.
+func predictIDError(value string) error {
+	if _, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64); err == nil {
+		return errOperatorIDNotPositive(0)
+	}
+	return errors.New(predictUsage)
 }
 
 // predictedCycleLengthBasis mirrors services.predictedCycleLength's choice

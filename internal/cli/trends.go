@@ -34,7 +34,10 @@ var trendsPhaseNames = []string{"menstrual", "follicular", "ovulation", "luteal"
 type trendsOptions struct {
 	userID uint
 	email  string
+	// tz is the --tz override; tzSet records that it was given, so an omitted
+	// --tz resolves to the OWNER's stored zone rather than to an implicit UTC.
 	tz     string
+	tzSet  bool
 	asJSON bool
 }
 
@@ -103,7 +106,8 @@ func runTrendsCommand(databaseConfig db.Config, args []string, output io.Writer)
 		return err
 	}
 
-	database, err := db.OpenDatabase(databaseConfig)
+	// Read-only: `trends` correlates the owner's logs and never writes.
+	database, err := openCLIDatabase(databaseConfig, true)
 	if err != nil {
 		return fmt.Errorf("database init failed: %w", err)
 	}
@@ -136,8 +140,19 @@ func runTrendsCommand(databaseConfig db.Config, args []string, output io.Writer)
 		return fmt.Errorf("trends symptoms: %w", err)
 	}
 
-	trends := services.BuildCyclePhaseTrends(opts.tz, logs, symptoms)
-	document := buildTrendsDocument(user, opts.tz, trends)
+	// The owner's persisted zone is the default — the phases are calendar days,
+	// so computing them in UTC splits an owner's evening log into the next day —
+	// and --tz overrides it. Both resolve through resolveOperatorLocation, which
+	// degrades an absent or unusable stored value to UTC, never to the server's
+	// own zone; BuildCyclePhaseTrends applies the same resolver to the name.
+	timezoneName := opts.tz
+	if !opts.tzSet {
+		_, timezoneName = resolveOperatorLocation(user.Timezone)
+	}
+	_, timezoneName = resolveOperatorLocation(timezoneName)
+
+	trends := services.BuildCyclePhaseTrends(timezoneName, logs, symptoms)
+	document := buildTrendsDocument(user, timezoneName, trends)
 
 	if output == nil {
 		output = os.Stdout
@@ -148,10 +163,14 @@ func runTrendsCommand(databaseConfig db.Config, args []string, output io.Writer)
 			return fmt.Errorf("render trends: %w", err)
 		}
 		payload = append(payload, '\n')
-		_, _ = output.Write(payload)
+		if _, err := output.Write(payload); err != nil {
+			return fmt.Errorf("write trends: %w", err)
+		}
 		return nil
 	}
-	_, _ = io.WriteString(output, renderTrendsTable(document))
+	if _, err := io.WriteString(output, renderTrendsTable(document)); err != nil {
+		return fmt.Errorf("write trends: %w", err)
+	}
 	return nil
 }
 
@@ -161,7 +180,7 @@ func runTrendsCommand(databaseConfig db.Config, args []string, output io.Writer)
 // resolve to a location time.LoadLocation accepts; a second positional, an
 // unknown flag or a bad --tz returns trendsUsage.
 func parseTrendsArgs(args []string) (trendsOptions, error) {
-	opts := trendsOptions{tz: "UTC"}
+	opts := trendsOptions{}
 	for index := 0; index < len(args); index++ {
 		arg := strings.TrimSpace(args[index])
 		if arg == "" {
@@ -199,16 +218,17 @@ func parseTrendsArgs(args []string) (trendsOptions, error) {
 
 		switch name {
 		case "id":
-			parsed, err := strconv.ParseUint(value, 10, 64)
+			parsed, err := parseOperatorUserID(value)
 			if err != nil {
-				return trendsOptions{}, errors.New(trendsUsage)
+				return trendsOptions{}, trendsIDError(value)
 			}
-			opts.userID = uint(parsed)
+			opts.userID = parsed
 		case "tz":
 			if _, err := time.LoadLocation(value); err != nil {
 				return trendsOptions{}, errors.New(trendsUsage)
 			}
 			opts.tz = value
+			opts.tzSet = true
 		case "json":
 			return trendsOptions{}, errors.New(trendsUsage)
 		default:
@@ -216,10 +236,21 @@ func parseTrendsArgs(args []string) (trendsOptions, error) {
 		}
 	}
 
-	if opts.email == "" && opts.userID == 0 {
+	if opts.email == "" && !operatorUserIDSelected(opts.userID) {
 		return trendsOptions{}, errors.New(trendsUsage)
 	}
 	return opts, nil
+}
+
+// trendsIDError keeps the non-positive --id message apart from the usage string,
+// exactly as export does: the flag was typed correctly and the VALUE is the
+// mistake. Treating the id as unset is what used to let `--id 0 <email>` report
+// another account's phases than the one addressed.
+func trendsIDError(value string) error {
+	if _, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64); err == nil {
+		return errOperatorIDNotPositive(0)
+	}
+	return errors.New(trendsUsage)
 }
 
 // buildTrendsDocument projects the service-level phase trends onto the

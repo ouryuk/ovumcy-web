@@ -183,7 +183,7 @@ func TestRunPredictCommandAcceptsIDAndRejectsBadInput(t *testing.T) {
 		t.Fatalf("expected usage error for a second positional")
 	}
 	opts, err := parsePredictArgs([]string{"--id=7", "--tz=UTC", "--json"})
-	if err != nil || opts.userID != 7 || !opts.asJSON || opts.tz != "UTC" {
+	if err != nil || opts.userID != 7 || !opts.asJSON || opts.tzSet {
 		t.Fatalf("expected the flag=value form to parse, got %+v (%v)", opts, err)
 	}
 }

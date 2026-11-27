@@ -69,8 +69,43 @@ func OpenDatabase(config Config) (*gorm.DB, error) {
 // by however many migrations are pending. A caller may touch only tables and
 // columns that predate the migration that is stuck, and must never assume a
 // column a pending migration adds. Everything else keeps using OpenDatabase.
+//
+// On SQLite it opens the file READ-WRITE (the repair path writes), so it is not
+// the read-only entry point — OpenDatabaseReadOnly is.
 func OpenDatabaseWithoutMigrations(config Config) (*gorm.DB, error) {
 	return openDatabase(config, false)
+}
+
+// OpenDatabaseReadOnly opens the database for a command that only reads:
+// nothing is migrated, and on SQLite the file is opened with `mode=ro`, so the
+// command can neither create the database, flip its journal mode, create
+// `-wal`/`-shm` files, nor write through a statement it was not supposed to
+// run. A read-only operator command pointed at a live instance is the reason
+// this exists: it used to go through OpenDatabase and therefore ran the
+// embedded migrations against the server's own file.
+//
+// A missing SQLite file is an ERROR here rather than a new empty database. That
+// is the point of the mode — `ovumcy export` against a mistyped DB_PATH must say
+// "there is no database there", not report an owner with no data.
+//
+// Postgres has no equivalent flag: the DSN is used as given and nothing is
+// migrated, which is the one part of the contract that is honoured for every
+// driver. Callers that must also be safe against writes there need a read-only
+// role, which is an operator decision, not something this function can impose.
+func OpenDatabaseReadOnly(config Config) (*gorm.DB, error) {
+	normalized := config.normalized()
+	if err := normalized.Validate(); err != nil {
+		return nil, err
+	}
+
+	switch normalized.Driver {
+	case DriverSQLite:
+		return openDatabaseWithMode(normalized, false, sqliteReadOnly)
+	case DriverPostgres:
+		return openDatabaseWithMode(normalized, false, sqliteReadWrite)
+	default:
+		return nil, fmt.Errorf("unsupported DB_DRIVER %q", normalized.Driver)
+	}
 }
 
 func openDatabase(config Config, applyMigrations bool) (*gorm.DB, error) {
@@ -78,7 +113,10 @@ func openDatabase(config Config, applyMigrations bool) (*gorm.DB, error) {
 	if err := normalized.Validate(); err != nil {
 		return nil, err
 	}
+	return openDatabaseWithMode(normalized, applyMigrations, sqliteReadWrite)
+}
 
+func openDatabaseWithMode(normalized Config, applyMigrations bool, mode sqliteOpenMode) (*gorm.DB, error) {
 	var (
 		database *gorm.DB
 		err      error
@@ -86,7 +124,7 @@ func openDatabase(config Config, applyMigrations bool) (*gorm.DB, error) {
 
 	switch normalized.Driver {
 	case DriverSQLite:
-		database, err = openSQLiteConnection(normalized.SQLitePath)
+		database, err = openSQLiteConnectionWith(normalized.SQLitePath, mode)
 	case DriverPostgres:
 		database, err = openPostgresConnection(normalized.PostgresURL)
 	default:

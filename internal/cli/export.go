@@ -21,6 +21,12 @@ import (
 // the same `<email>|--id <id>` pair the account subcommands take.
 const exportUsage = "usage: ovumcy export <email> [--id <id>] [--out <path>]"
 
+// exportFileMode is the only mode an export file is ever left in. It is
+// owner-read/write, nothing else: the payload is intimate health data, and
+// --out documents this mode, so an existing wider file must be narrowed rather
+// than inherited (see writeExportFile).
+const exportFileMode os.FileMode = 0o600
+
 // exportSchemaVersion tags the payload so a consumer (a re-importer, a
 // migration script) can detect which shape of document it is reading before it
 // touches anything in it. Bumping it is the contract for a breaking change.
@@ -112,7 +118,9 @@ func runExportCommand(databaseConfig db.Config, args []string, output io.Writer)
 		return err
 	}
 
-	database, err := db.OpenDatabase(databaseConfig)
+	// Read-only: `export` never writes, so it must not open a live instance's
+	// database read-write and must not run the embedded migrations against it.
+	database, err := openCLIDatabase(databaseConfig, true)
 	if err != nil {
 		return fmt.Errorf("database init failed: %w", err)
 	}
@@ -156,7 +164,12 @@ func runExportCommand(databaseConfig db.Config, args []string, output io.Writer)
 	if output == nil {
 		output = os.Stdout
 	}
-	_, _ = output.Write(payload)
+	if _, err := output.Write(payload); err != nil {
+		// A failed stdout write (`> file` on a full disk, a closed pipe) must
+		// reach the operator as a non-zero exit: silently dropping a health
+		// export's tail and reporting success is the worst possible answer.
+		return fmt.Errorf("write export: %w", err)
+	}
 	return nil
 }
 
@@ -200,19 +213,32 @@ func parseExportArgs(args []string) (exportOptions, error) {
 
 		switch name {
 		case "id":
-			parsed, err := strconv.ParseUint(value, 10, 64)
+			parsed, err := parseOperatorUserID(value)
 			if err != nil {
+				// A well-formed but non-positive id is refused with its OWN
+				// message rather than the usage string: --id was typed
+				// correctly and the value is the mistake, so the operator needs
+				// to read what was wrong with it. Treating it as "no --id"
+				// instead — which is what a zero value meant before — fell
+				// through to the email lookup and exported a DIFFERENT account
+				// than the one addressed.
+				if _, parseErr := strconv.ParseUint(strings.TrimSpace(value), 10, 64); parseErr == nil {
+					return exportOptions{}, errOperatorIDNotPositive(0)
+				}
 				return exportOptions{}, errors.New(exportUsage)
 			}
-			opts.userID = uint(parsed)
+			opts.userID = parsed
 		case "out":
+			if strings.TrimSpace(value) == "" {
+				return exportOptions{}, errors.New(exportUsage)
+			}
 			opts.out = value
 		default:
 			return exportOptions{}, errors.New(exportUsage)
 		}
 	}
 
-	if opts.email == "" && opts.userID == 0 {
+	if opts.email == "" && !operatorUserIDSelected(opts.userID) {
 		return exportOptions{}, errors.New(exportUsage)
 	}
 	return opts, nil
@@ -301,6 +327,15 @@ func exportSymptomTypeFrom(symptom models.SymptomType) exportSymptomType {
 // written, so the umask cannot leak a moment of the contents to a wider mode,
 // and truncates only through that same handle. The file is closed before the
 // error is reported so the operator can act on it immediately.
+//
+// The creation mode alone is not enough: it only applies when the file does not
+// exist yet. `--out` onto a path that already exists — an earlier export, a
+// file the operator created with `touch`, a note the umask made 0644 — keeps
+// whatever mode that file already had, so an intimate health payload would land
+// world-readable exactly on the second run, when the operator has every reason
+// to trust the documented 0600. The mode is therefore enforced on the OPENED
+// handle (fchmod) before the first byte, and again after the write to close the
+// window in which a concurrent chmod would be undone by nothing.
 func writeExportFile(path string, payload []byte) error {
 	// #nosec G304 -- the path is the operator's own --out argument to a local CLI command, never
 	// request input, and the file is created with mode 0600 before any byte is written.
@@ -308,7 +343,15 @@ func writeExportFile(path string, payload []byte) error {
 	if err != nil {
 		return fmt.Errorf("write export: %w", err)
 	}
+	if err := file.Chmod(exportFileMode); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write export: %w", err)
+	}
 	if _, err := file.Write(payload); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write export: %w", err)
+	}
+	if err := file.Chmod(exportFileMode); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("write export: %w", err)
 	}

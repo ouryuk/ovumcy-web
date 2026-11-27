@@ -417,6 +417,7 @@
   "webhook.reminder.period.message": "Prochaines règles estimées autour du %s.",
   "webhook.reminder.ovulation.title": "Rappel d'ovulation",
   "webhook.reminder.ovulation.message": "Ovulation estimée autour du %s.",
+  "webhook.digest.title": "Récapitulatif hebdomadaire Ovumcy",
   "webhook.test.title": "Test du webhook Ovumcy",
   "webhook.test.message": "Ceci est une notification de test d'Ovumcy, envoyée le %s. Elle ne contient aucune prédiction de règles ni d'ovulation.",
   "settings.success.calendar_feed_generated": "Flux de calendrier activé. Copiez votre lien d'abonnement maintenant : il ne s'affiche qu'une seule fois.",

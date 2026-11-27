@@ -681,6 +681,7 @@
   "webhook.reminder.period.message": "Prossimo ciclo stimato intorno al %s.",
   "webhook.reminder.ovulation.title": "Promemoria dell'ovulazione",
   "webhook.reminder.ovulation.message": "Ovulazione stimata intorno al %s.",
+  "webhook.digest.title": "Riepilogo settimanale Ovumcy",
   "webhook.test.title": "Test webhook di Ovumcy",
   "webhook.test.message": "Questa è una notifica di prova di Ovumcy, inviata il %s. Non contiene alcuna previsione del ciclo o dell'ovulazione.",
   "settings.success.calendar_feed_generated": "Feed del calendario attivato. Copia subito il tuo link di iscrizione: viene mostrato solo una volta.",

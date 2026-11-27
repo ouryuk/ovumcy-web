@@ -25,6 +25,7 @@ func tryRunCLICommand() (bool, error) {
 		runSummary:          cli.RunSummaryCommand,
 		runTrends:           cli.RunTrendsCommand,
 		runPredict:          cli.RunPredictCommand,
+		runDigest:           cli.RunDigestCommand, // codecov:ignore -- main() composition-root wiring; this os.Args dispatch wrapper runs only in the binary (the handler is unit-tested via tryRunCLICommandWithHandlers with a stub)
 	})
 }
 
@@ -41,6 +42,10 @@ type cliCommandHandlers struct {
 	runSummary          func(databaseConfig db.Config, args []string) error
 	runTrends           func(databaseConfig db.Config, args []string) error
 	runPredict          func(databaseConfig db.Config, args []string) error
+	// runDigest composes summary + trends + predict into one shareable digest.
+	// Its --ntfy delivery needs the same secret the notify pass uses to decrypt
+	// the owner's stored webhook URL, so it takes the same configuration surface.
+	runDigest func(databaseConfig db.Config, secretKey string, blockPrivateAddresses bool, args []string) error
 }
 
 func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (bool, error) {
@@ -73,6 +78,8 @@ func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (b
 		return handleTrendsCommand(args, handlers)
 	case "predict":
 		return handlePredictCommand(args, handlers)
+	case "digest":
+		return handleDigestCommand(args, handlers)
 	default:
 		return false, nil
 	}
@@ -270,6 +277,36 @@ func handlePredictCommand(args []string, handlers cliCommandHandlers) (bool, err
 		return true, fmt.Errorf("invalid database config: %w", err)
 	}
 	return true, handlers.runPredict(databaseConfig, args[1:])
+}
+
+// handleDigestCommand dispatches `ovumcy digest`: a read-only composition of
+// summary, trends and predict into one shareable weekly digest. It resolves the
+// same configuration the notify pass does — the secret key that decrypts the
+// owner's stored webhook URL and the egress gate — because --ntfy delivers
+// through that same endpoint. Without --ntfy the secret is never used.
+func handleDigestCommand(args []string, handlers cliCommandHandlers) (bool, error) {
+	if len(args) < 2 {
+		return true, fmt.Errorf("usage: ovumcy digest <email> [--id <id>] [--week] [--days N] [--format markdown|json] [--tz <IANA name>] [--ntfy]")
+	}
+	if handlers.runDigest == nil {
+		return true, fmt.Errorf("digest handler is required")
+	}
+	databaseConfig, err := resolveDatabaseConfig()
+	if err != nil {
+		return true, fmt.Errorf("invalid database config: %w", err)
+	}
+	secretKey, err := resolveSecretKey()
+	if err != nil {
+		return true, fmt.Errorf("invalid SECRET_KEY: %w", err)
+	}
+	// Strict, exactly as `notify` and the server boot read it: the digest's
+	// --ntfy path is an egress path, so a value the server would refuse to start
+	// on must not be reinterpreted here into an unguarded delivery.
+	blockPrivateAddresses, err := getEnvBoolStrict("WEBHOOK_BLOCK_PRIVATE_ADDRESSES", false)
+	if err != nil {
+		return true, err
+	}
+	return true, handlers.runDigest(databaseConfig, secretKey, blockPrivateAddresses, args[1:])
 }
 
 func handleWebhookCommand(args []string, handlers cliCommandHandlers) (bool, error) {

@@ -697,6 +697,7 @@
   "webhook.reminder.period.message": "Следующие месячные ожидаются около %s.",
   "webhook.reminder.ovulation.title": "Напоминание об овуляции",
   "webhook.reminder.ovulation.message": "Овуляция ожидается около %s.",
+  "webhook.digest.title": "Недельная сводка Ovumcy",
   "webhook.test.title": "Тест веб-хука Ovumcy",
   "webhook.test.message": "Это тестовое уведомление от Ovumcy, отправленное %s. Оно не содержит прогноза месячных или овуляции.",
   "settings.success.calendar_feed_generated": "Календарная лента включена. Скопируйте ссылку сейчас — она показывается только один раз.",

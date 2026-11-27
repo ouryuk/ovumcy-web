@@ -299,10 +299,12 @@ func TestRunPreflightCommandReportsNoWebhookAndDisabled(t *testing.T) {
 		t.Fatalf("expected ready=false")
 	}
 
-	// An owner with no endpoint, delivery off and both reminder kinds off gets all
-	// three findings, in the documented repair order: the endpoint first, then the
-	// master switch, then the per-kind opt-ins.
-	want := []string{"no_webhook_configured", "webhook_disabled", "reminder_toggles_off"}
+	// An owner with no endpoint and delivery off gets both endpoint findings, in
+	// the documented repair order: the endpoint first, then the master switch.
+	// The per-kind toggles are left ON by the schema default, and the delivery
+	// findings are deliberately silent while nothing is armed, so neither adds a
+	// line here — a fresh account is described as unconfigured, not as broken.
+	want := []string{"no_webhook_configured", "webhook_disabled"}
 	got := findingCodes(document.Findings)
 	if len(got) != len(want) {
 		t.Fatalf("expected findings %v, got %v", want, got)
@@ -494,13 +496,16 @@ func TestRunPreflightCommandReportsNoCycleHistory(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected a not-ready verdict with no cycle history")
 	}
-	// The report is still written to stdout before the verdict error, so a
-	// script can capture it — that is part of the exit-code contract.
+	// A log-less owner has no anchor: no cycle history, no endpoint, delivery
+	// off. Nothing suppresses the projection here (no pregnancy pause, no
+	// overdue cycle), so the report says plainly that there is nothing to project
+	// from yet rather than blaming a suppression.
 	for _, want := range []string{
 		"verdict: not ready",
-		"none — both reminder kinds are switched off",
+		"none — nothing can be projected yet",
 		"[no_cycle_history]",
 		"[no_webhook_configured]",
+		"[webhook_disabled]",
 		"fix: ",
 	} {
 		if !strings.Contains(rendered, want) {
@@ -647,4 +652,78 @@ func TestPreflightOptedIntoAKind(t *testing.T) {
 	if !preflightOptedIntoAKind(&models.User{WebhookNotifyOvulation: true}) {
 		t.Fatalf("expected true when the ovulation kind is on")
 	}
+}
+
+// TestBuildPreflightNextReminderPicksTheNearerKind exercises the selection the
+// report performs once both kinds are on: the period date wins a tie (it is the
+// more actionable of the two, the same precedence the in-app banner uses) and an
+// earlier date wins outright, whichever kind it belongs to.
+func TestBuildPreflightNextReminderPicksTheNearerKind(t *testing.T) {
+	today := time.Date(2026, time.March, 27, 0, 0, 0, 0, time.UTC)
+	periodDate := time.Date(2026, time.April, 10, 0, 0, 0, 0, time.UTC)
+	ovulationDate := time.Date(2026, time.April, 20, 0, 0, 0, 0, time.UTC)
+	readyUser := func() *models.User {
+		return &models.User{WebhookNotifyPeriod: true, WebhookNotifyOvulation: true}
+	}
+	noSuppression := services.PredictionSuppression{}
+
+	t.Run("period wins a tie", func(t *testing.T) {
+		sameDay := periodDate
+		reminder := buildPreflightNextReminder(readyUser(), services.DashboardUpcomingPrediction{
+			NextPeriodStart: sameDay,
+			OvulationDate:   sameDay,
+		}, noSuppression, nil, today, 3)
+		if reminder.Kind != services.DueReminderTypePeriod {
+			t.Fatalf("expected the period kind to win the tie, got %q", reminder.Kind)
+		}
+	})
+
+	t.Run("the nearer date wins", func(t *testing.T) {
+		reminder := buildPreflightNextReminder(readyUser(), services.DashboardUpcomingPrediction{
+			NextPeriodStart: periodDate,
+			OvulationDate:   ovulationDate,
+		}, noSuppression, nil, today, 3)
+		if reminder.Kind != services.DueReminderTypePeriod || reminder.ProjectedDate != "2026-04-10" {
+			t.Fatalf("expected the nearer period date, got %+v", reminder)
+		}
+		if reminder.DaysUntil == nil || *reminder.DaysUntil != 14 {
+			t.Fatalf("expected 14 days out, got %v", reminder.DaysUntil)
+		}
+	})
+
+	t.Run("only the ovulation kind is on", func(t *testing.T) {
+		reminder := buildPreflightNextReminder(&models.User{WebhookNotifyOvulation: true}, services.DashboardUpcomingPrediction{
+			NextPeriodStart: periodDate,
+			OvulationDate:   ovulationDate,
+		}, noSuppression, map[string]bool{services.DueReminderTypeOvulation: true}, today, 3)
+		if reminder.Kind != services.DueReminderTypeOvulation || !reminder.DueToday {
+			t.Fatalf("expected an ovulation reminder due today, got %+v", reminder)
+		}
+	})
+
+	t.Run("both kinds off", func(t *testing.T) {
+		reminder := buildPreflightNextReminder(&models.User{}, services.DashboardUpcomingPrediction{},
+			noSuppression, nil, today, 3)
+		if reminder.Reason != "both reminder kinds are switched off" {
+			t.Fatalf("unexpected reason: %q", reminder.Reason)
+		}
+	})
+
+	t.Run("a switched-on kind with nothing to project", func(t *testing.T) {
+		reminder := buildPreflightNextReminder(&models.User{WebhookNotifyPeriod: true}, services.DashboardUpcomingPrediction{},
+			noSuppression, nil, today, 3)
+		if reminder.Reason != "nothing can be projected yet" {
+			t.Fatalf("unexpected reason: %q", reminder.Reason)
+		}
+	})
+
+	t.Run("a suppression withholds the projection", func(t *testing.T) {
+		reminder := buildPreflightNextReminder(readyUser(), services.DashboardUpcomingPrediction{
+			NextPeriodStart: periodDate,
+		}, services.PredictionSuppression{PredictionsSuppressed: true,
+			Reasons: []services.SuppressionReason{services.SuppressionReasonCycleOverdue}}, nil, today, 3)
+		if reminder.Kind != "" || !strings.Contains(reminder.Reason, "cycle_overdue") {
+			t.Fatalf("expected a suppression reason and no kind, got %+v", reminder)
+		}
+	})
 }

@@ -262,14 +262,18 @@ func runPreflightCommand(databaseConfig db.Config, args []string, output io.Writ
 		return mapOperatorUserLookupError(err, opts.userID, opts.email)
 	}
 
-	// The report needs the FULL user row — the cycle-prediction inputs, the
-	// webhook settings and the delivery stamp — not just the summary
-	// resolveOperatorUser returned. LoadSettingsByID is the whitelist read the
-	// settings page and `webhook show` both use, and it selects
-	// webhook_last_delivered_at; it is a read, nothing here writes.
-	user, err := repositories.Users.LoadSettingsByID(context.Background(), summary.ID)
+	// The report needs the FULL user row — the id the log query keys on, the
+	// role and cycle lengths the baseline pass reads, the webhook settings and
+	// the delivery stamp. LoadSettingsByID is the settings page's whitelist read
+	// and deliberately omits `id` and `role`, so it is the wrong seam here: the
+	// log query below would key on 0 and every owner would look history-less.
+	// predict uses FindByIDOptional for the same reason.
+	user, found, err := repositories.Users.FindByIDOptional(context.Background(), summary.ID)
 	if err != nil {
 		return fmt.Errorf("preflight user lookup: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("preflight user lookup: %w", services.ErrOperatorUserNotFound)
 	}
 
 	// The decision needs the owner's full history — every completed cycle

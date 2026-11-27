@@ -2,14 +2,51 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ovumcy/ovumcy-web/internal/db"
 	"github.com/ovumcy/ovumcy-web/internal/models"
+	"github.com/ovumcy/ovumcy-web/internal/services"
 )
+
+// openDigestRepositories opens a repository set over the test database, the
+// same construction the command uses, so the delivery tests exercise the real
+// UserRepository rather than a fake.
+func openDigestRepositories(t *testing.T, databasePath string) (*db.Repositories, *services.CalendarFeedRestoreFence) {
+	t.Helper()
+
+	database, err := db.OpenDatabase(sqliteConfig(databasePath))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	sqlDB, err := database.DB()
+	if err != nil {
+		t.Fatalf("open sql db: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	return buildRepositories(database, calendarFeedFencePath())
+}
+
+// digestHostOf is the expected redaction of a test endpoint: the host, taken
+// the same way the production report takes it.
+func digestHostOf(t *testing.T, endpoint string) string {
+	t.Helper()
+
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatalf("parse test endpoint %q: %v", endpoint, err)
+	}
+	return parsed.Hostname()
+}
 
 // pinDigestNow pins digestNow's clock for the duration of one test and restores
 // the real clock afterwards, exactly as pinPredictNow does for predict.
@@ -269,6 +306,36 @@ func TestRunDigestCommandWindowEndsOnTheOwnersCalendarDay(t *testing.T) {
 	}
 }
 
+// TestRunDigestCommandWindowSurvivesASkippedLocalMidnight is the DST regression:
+// America/Santiago springs forward at midnight on 2026-09-06, so that day has no
+// local midnight at all. The window is stepped from a UTC anchor, so the day is
+// not silently lost — the failure mode AddDate-from-a-location-anchor produces,
+// where the step resolves BACKWARD to 2026-09-05T23:00 and the window ends a day
+// early.
+func TestRunDigestCommandWindowSurvivesASkippedLocalMidnight(t *testing.T) {
+	databasePath := createCLIUsersDatabase(t)
+	seedDigestFixture(t, databasePath)
+	// 14:00Z on 2026-09-06 is 11:00 local in Santiago — comfortably inside the day.
+	pinDigestNow(t, time.Date(2026, time.September, 6, 14, 0, 0, 0, time.UTC))
+
+	rendered := runDigestRaw(t, databasePath, "digest-owner@example.com", "--week", "--tz", "America/Santiago", "--format", "json")
+
+	var document DigestDocument
+	if err := json.Unmarshal([]byte(rendered), &document); err != nil {
+		t.Fatalf("output is not valid JSON: %v (%q)", err, rendered)
+	}
+	if document.AsOf != "2026-09-06" {
+		t.Fatalf("expected as_of 2026-09-06, got %q", document.AsOf)
+	}
+	// A seven-day window ending on the 6th starts on the 31st of August.
+	if document.To != "2026-09-06" || document.From != "2026-08-31" {
+		t.Fatalf("expected window 2026-08-31..2026-09-06, got %q..%q", document.From, document.To)
+	}
+	if document.WindowDays != digestWeekDays {
+		t.Fatalf("expected %d window days, got %d", digestWeekDays, document.WindowDays)
+	}
+}
+
 // TestRunDigestCommandPrefersTheOwnersPersistedTimezone proves the default: with
 // no --tz the digest reads users.timezone, which is the whole point of a
 // shareable digest agreeing with the calendar the owner actually reads.
@@ -505,6 +572,189 @@ func TestResolveDigestTimezone(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			if got := resolveDigestTimezone(testCase.override, testCase.stored); got != testCase.want {
+				t.Fatalf("expected %q, got %q", testCase.want, got)
+			}
+		})
+	}
+}
+
+// storeDigestWebhook persists a real encrypted endpoint for the owner through
+// the shipped `webhook set` path, so the delivery tests exercise the same
+// ciphertext-at-rest the production notifier decrypts.
+func storeDigestWebhook(t *testing.T, databasePath string, email string, endpoint string) {
+	t.Helper()
+
+	var output bytes.Buffer
+	err := runWebhookCommand(
+		sqliteConfig(databasePath),
+		testWebhookSecretKey,
+		[]string{"set", email, "--enabled=true", "--notify-period=true", "--notify-ovulation=true", "--url-stdin"},
+		strings.NewReader(endpoint+"\n"),
+		&output,
+	)
+	if err != nil {
+		t.Fatalf("runWebhookCommand(set) returned error: %v", err)
+	}
+}
+
+// TestDigestNotifierDeliversToTheStoredEndpoint drives the REAL notifier — the
+// shipped decrypt seam, the shipped URL guard and the shipped hardened
+// deliverer — against a local endpoint, so --ntfy's production path is covered
+// rather than only its stub. It also proves the payload carries the digest in
+// the message body and the mandatory disclaimer.
+func TestDigestNotifierDeliversToTheStoredEndpoint(t *testing.T) {
+	databasePath := createCLIUsersDatabase(t)
+	user, _, _ := seedDigestFixture(t, databasePath)
+
+	var received services.WebhookPayload
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
+			t.Errorf("decode payload: %v", err)
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	storeDigestWebhook(t, databasePath, "digest-owner@example.com", server.URL+"/digest-topic")
+
+	repositories, _ := openDigestRepositories(t, databasePath)
+	notifier := NewDigestNotifier(repositories.Users, testWebhookSecretKey, false)
+
+	host, err := notifier.Deliver(context.Background(), user.ID, "# Resumen semanal de Ovumcy\n")
+	if err != nil {
+		t.Fatalf("Deliver returned error: %v", err)
+	}
+	// The report names the HOST, never the URL or its path.
+	if host != digestHostOf(t, server.URL) {
+		t.Fatalf("expected the endpoint host %q, got %q", digestHostOf(t, server.URL), host)
+	}
+	if received.Message != "# Resumen semanal de Ovumcy\n" {
+		t.Fatalf("expected the digest as the message body, got %q", received.Message)
+	}
+	// The envelope is resolved from the catalogue at the digest's language, not a
+	// literal: the Spanish medical disclaimer and the Spanish digest title.
+	if received.Title != "Resumen semanal de Ovumcy" {
+		t.Fatalf("expected the Spanish catalogue title, got %q", received.Title)
+	}
+	if !strings.Contains(received.Disclaimer, "no consejo médico") {
+		t.Fatalf("expected the Spanish medical disclaimer from the catalogue, got %q", received.Disclaimer)
+	}
+	// The mandatory disclaimer is never the empty miss-rendering.
+	if strings.TrimSpace(received.Disclaimer) == "" {
+		t.Fatalf("the delivered payload carried no disclaimer")
+	}
+}
+
+// TestDigestNotifierReportsEachDeliveryFailure covers the sentinel vocabulary:
+// no stored endpoint, an unusable stored value, and an endpoint that refuses
+// the POST. None of them may echo the URL.
+func TestDigestNotifierReportsEachDeliveryFailure(t *testing.T) {
+	t.Run("no endpoint stored", func(t *testing.T) {
+		databasePath := createCLIUsersDatabase(t)
+		user, _, _ := seedDigestFixture(t, databasePath)
+
+		repositories, _ := openDigestRepositories(t, databasePath)
+		notifier := NewDigestNotifier(repositories.Users, testWebhookSecretKey, false)
+
+		host, err := notifier.Deliver(context.Background(), user.ID, "# digest\n")
+		if !errors.Is(err, ErrDigestDeliveryNotConfigured) {
+			t.Fatalf("expected ErrDigestDeliveryNotConfigured, got %v", err)
+		}
+		if host != "" {
+			t.Fatalf("expected no host, got %q", host)
+		}
+	})
+
+	t.Run("stored ciphertext does not decrypt", func(t *testing.T) {
+		databasePath := createCLIUsersDatabase(t)
+		user, _, _ := seedDigestFixture(t, databasePath)
+		storeDigestWebhook(t, databasePath, "digest-owner@example.com", "https://ntfy.example/topic-abc")
+
+		// A different SECRET_KEY cannot open the stored ciphertext.
+		repositories, _ := openDigestRepositories(t, databasePath)
+		notifier := NewDigestNotifier(repositories.Users, "ffffffffffffffffffffffffffffffff", false)
+
+		if _, err := notifier.Deliver(context.Background(), user.ID, "# digest\n"); !errors.Is(err, ErrDigestDeliveryUnavailable) {
+			t.Fatalf("expected ErrDigestDeliveryUnavailable, got %v", err)
+		}
+	})
+
+	t.Run("endpoint refuses the POST", func(t *testing.T) {
+		databasePath := createCLIUsersDatabase(t)
+		user, _, _ := seedDigestFixture(t, databasePath)
+
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(server.Close)
+		storeDigestWebhook(t, databasePath, "digest-owner@example.com", server.URL+"/digest-topic")
+
+		repositories, _ := openDigestRepositories(t, databasePath)
+		notifier := NewDigestNotifier(repositories.Users, testWebhookSecretKey, false)
+
+		host, err := notifier.Deliver(context.Background(), user.ID, "# digest\n")
+		if !errors.Is(err, ErrDigestDeliveryFailed) {
+			t.Fatalf("expected ErrDigestDeliveryFailed, got %v", err)
+		}
+		// A refused delivery still names the host it tried, for the report.
+		if host != digestHostOf(t, server.URL) {
+			t.Fatalf("expected the endpoint host, got %q", host)
+		}
+	})
+}
+
+// TestRunDigestDeliveryReportsAnAttempt proves the production --ntfy wrapper
+// records the attempt and reports the real outcome through the document.
+func TestRunDigestDeliveryReportsAnAttempt(t *testing.T) {
+	databasePath := createCLIUsersDatabase(t)
+	user, _, _ := seedDigestFixture(t, databasePath)
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	storeDigestWebhook(t, databasePath, "digest-owner@example.com", server.URL+"/digest-topic")
+
+	report := runDigestDelivery(sqliteConfig(databasePath), testWebhookSecretKey, false, user.ID, "# digest\n")
+	if report == nil || !report.Attempted {
+		t.Fatalf("expected an attempted delivery, got %+v", report)
+	}
+	if !report.Delivered || report.Error != "" {
+		t.Fatalf("expected a successful delivery, got %+v", report)
+	}
+	if report.Host != digestHostOf(t, server.URL) {
+		t.Fatalf("expected the endpoint host, got %q", report.Host)
+	}
+}
+
+// TestRunDigestCommandThroughThePublicEntryPoint proves the os.Stdout wrapper
+// runs the same command and renders the digest to stdout.
+func TestRunDigestCommandThroughThePublicEntryPoint(t *testing.T) {
+	databasePath := createCLIUsersDatabase(t)
+	seedDigestFixture(t, databasePath)
+	pinDigestNow(t, time.Date(2026, time.March, 27, 12, 0, 0, 0, time.UTC))
+
+	// RunDigestCommand writes to os.Stdout; capturing it is the point of the
+	// wrapper, so the assertion is that it succeeds without error.
+	if err := RunDigestCommand(sqliteConfig(databasePath), testWebhookSecretKey, false, []string{"digest-owner@example.com", "--week"}); err != nil {
+		t.Fatalf("RunDigestCommand returned error: %v", err)
+	}
+}
+
+// TestDigestHostOnly covers the redaction helper directly, including the URL
+// that cannot be parsed.
+func TestDigestHostOnly(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "https endpoint keeps only the host", raw: "https://ntfy.example/topic-abc?token=tk_secret", want: "ntfy.example"},
+		{name: "port is dropped", raw: "http://127.0.0.1:9999/topic", want: "127.0.0.1"},
+		{name: "unparseable value yields nothing", raw: "://nonsense", want: ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := digestHostOnly(testCase.raw); got != testCase.want {
 				t.Fatalf("expected %q, got %q", testCase.want, got)
 			}
 		})

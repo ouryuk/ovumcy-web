@@ -681,6 +681,7 @@
   "webhook.reminder.period.message": "Nächste Periode voraussichtlich um den %s.",
   "webhook.reminder.ovulation.title": "Erinnerung an den Eisprung",
   "webhook.reminder.ovulation.message": "Eisprung voraussichtlich um den %s.",
+  "webhook.digest.title": "Wöchentlicher Ovumcy-Rückblick",
   "webhook.test.title": "Ovumcy-Webhook-Test",
   "webhook.test.message": "Dies ist eine Testbenachrichtigung von Ovumcy, gesendet am %s. Sie enthält keine Perioden- oder Eisprungprognose.",
   "settings.success.calendar_feed_generated": "Kalender-Feed aktiviert. Kopiere jetzt deinen Abo-Link — er wird nur einmal angezeigt.",

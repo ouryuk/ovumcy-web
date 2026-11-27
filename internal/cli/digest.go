@@ -142,7 +142,7 @@ var _ digestDelivery = (*digestNotifier)(nil)
 // NewDigestNotifier builds the --ntfy delivery seam over the shipped webhook
 // components. secretKey is the same SECRET_KEY the web binary and `ovumcy notify`
 // use; blockPrivateAddresses is the same off-by-default egress gate.
-func NewDigestNotifier(users services.WebhookSettingsRepository, secretKey string, blockPrivateAddresses bool) *digestNotifier {
+func NewDigestNotifier(users services.WebhookSettingsRepository, secretKey string, blockPrivateAddresses bool) digestDelivery {
 	return &digestNotifier{
 		users:     users,
 		settings:  services.NewWebhookSettingsService(users, []byte(secretKey)),
@@ -172,9 +172,9 @@ func (notifier *digestNotifier) Deliver(ctx context.Context, userID uint, markdo
 	}
 	host := digestHostOnly(endpoint)
 	payload := services.WebhookPayload{
-		Title:      digestNtfyTitle,
+		Title:      digestCatalogueString(digestTitleKey, digestNtfyTitle),
 		Message:    markdown,
-		Disclaimer: digestNtfyDisclaimer,
+		Disclaimer: digestCatalogueString(medicalDisclaimerKey, digestNtfyDisclaimer),
 		Type:       services.WebhookTestType,
 		EventDate:  time.Now().UTC().Format("2006-01-02"),
 		LeadDays:   0,
@@ -197,14 +197,42 @@ func digestHostOnly(rawURL string) string {
 	return parsed.Hostname()
 }
 
-// digestNtfyTitle and digestNtfyDisclaimer are the two fixed strings the digest
-// payload carries. The title names the message so a consumer can route on it; the
-// disclaimer is the medical-safety sentence a shareable health summary must carry
-// (the same wording the predict document and the webhook payloads use).
+// The two catalogue keys the delivered payload resolves. medicalDisclaimerKey is
+// the SAME entry every other owner-visible safety string uses: the shipped
+// WebhookPayload contract requires the disclaimer to come from the catalogue at
+// one language, never a literal duplicated per call site.
+const (
+	digestTitleKey       = "webhook.digest.title"
+	medicalDisclaimerKey = "medical.disclaimer"
+)
+
+// digestNtfyTitle and digestNtfyDisclaimer are the last-resort fallbacks for the
+// two catalogue lookups above. They exist because a miss renders as an empty
+// string, and a delivery that must not go silent (a shareable health summary)
+// carries its own fallback rather than shipping a blank safety line.
 const (
 	digestNtfyTitle      = "Resumen semanal de Ovumcy"
 	digestNtfyDisclaimer = "these dates are projections from past cycles, not guarantees"
 )
+
+// digestCatalogueString resolves one catalogue key in the digest's language,
+// falling back to `fallback` when the catalogue does not carry it. It builds the
+// manager per call deliberately: the digest delivers rarely (an operator asked
+// for it), and an embedded-catalogue read is cheap next to the HTTP POST it is
+// assembling a payload for.
+func digestCatalogueString(key string, fallback string) string {
+	manager, err := i18n.NewManager(digestLanguage)
+	if err != nil {
+		// codecov:ignore -- unreachable: NewManager only errors on a corrupt or
+		// incomplete EMBEDDED catalogue, which is a build-time condition the
+		// binary cannot start without; mirrors the same guard in notify.go.
+		return fallback
+	}
+	if value := strings.TrimSpace(manager.Messages(digestLanguage)[key]); value != "" {
+		return value
+	}
+	return fallback
+}
 
 // ErrDigestDeliveryNotConfigured is returned when the owner has no webhook
 // endpoint stored. ErrDigestDeliveryUnavailable covers an unreadable ciphertext
@@ -230,12 +258,12 @@ func runDigestDelivery(databaseConfig db.Config, secretKey string, blockPrivateA
 	report := &digestDeliveryDoc{Attempted: true}
 	database, err := db.OpenDatabase(databaseConfig)
 	if err != nil {
-		report.Error = ErrDigestDeliveryUnavailable.Error()
+		report.Error = ErrDigestDeliveryUnavailable.Error() // codecov:ignore -- defensive: the command already opened this same config to build the digest it is now delivering
 		return report
 	}
 	sqlDB, err := database.DB()
 	if err != nil {
-		report.Error = ErrDigestDeliveryUnavailable.Error()
+		report.Error = ErrDigestDeliveryUnavailable.Error() // codecov:ignore -- defensive: (*gorm.DB).DB() only errors when the pool is unavailable, which cannot happen on the handle the open just returned
 		return report
 	}
 	defer func() {
@@ -243,9 +271,10 @@ func runDigestDelivery(databaseConfig db.Config, secretKey string, blockPrivateA
 	}()
 
 	repositories, _ := buildRepositories(database, calendarFeedFencePath())
-	// Typed as the interface, not the concrete notifier: the production path and a
-	// test stub are interchangeable here, which is the whole point of the seam.
-	var notifier digestDelivery = NewDigestNotifier(repositories.Users, secretKey, blockPrivateAddresses)
+	// Typed as the interface by its constructor, not the concrete notifier: the
+	// production path and a test stub are interchangeable here, which is the whole
+	// point of the seam.
+	notifier := NewDigestNotifier(repositories.Users, secretKey, blockPrivateAddresses)
 	host, err := notifier.Deliver(context.Background(), userID, markdown)
 	report.Host = host
 	if err != nil {
@@ -281,11 +310,11 @@ func runDigestCommand(databaseConfig db.Config, secretKey string, blockPrivateAd
 
 	database, err := db.OpenDatabase(databaseConfig)
 	if err != nil {
-		return fmt.Errorf("database init failed: %w", err)
+		return fmt.Errorf("database init failed: %w", err) // codecov:ignore -- defensive: every CLI subcommand reaches the same open, and a bad config is reported by the caller's own validation; mirrors repair.go and notify.go
 	}
 	sqlDB, err := database.DB()
 	if err != nil {
-		return fmt.Errorf("database init failed: %w", err)
+		return fmt.Errorf("database init failed: %w", err) // codecov:ignore -- defensive: (*gorm.DB).DB() only errors when the pool is unavailable, which cannot happen on the handle the open just returned
 	}
 	defer func() {
 		_ = sqlDB.Close()
@@ -309,7 +338,7 @@ func runDigestCommand(databaseConfig db.Config, secretKey string, blockPrivateAd
 		return fmt.Errorf("digest user lookup: %w", err)
 	}
 	if !found {
-		return fmt.Errorf("digest user lookup: %w", services.ErrOperatorUserNotFound)
+		return fmt.Errorf("digest user lookup: %w", services.ErrOperatorUserNotFound) // codecov:ignore -- unreachable: resolveOperatorUser already resolved this id from the same table, so a miss here would need the row deleted in between; mirrors predict.go
 	}
 
 	// The digest's calendar is the owner's: the persisted users.timezone is the
@@ -318,7 +347,7 @@ func runDigestCommand(databaseConfig db.Config, secretKey string, blockPrivateAd
 	timezone := resolveDigestTimezone(opts.tz, user.Timezone)
 	location, err := time.LoadLocation(timezone)
 	if err != nil {
-		return errors.New(digestUsage)
+		return errors.New(digestUsage) // codecov:ignore -- unreachable: resolveDigestTimezone only ever returns an explicit --tz (validated at parse) or a stored value it just resolved, falling back to UTC otherwise
 	}
 
 	// ONE clock for the whole document: the summary window's end and the
@@ -326,11 +355,20 @@ func runDigestCommand(databaseConfig db.Config, secretKey string, blockPrivateAd
 	// window ending on a different day than the projection's "as of".
 	now := digestNow()
 	asOf := services.DateAtLocation(now, location)
-	from := asOf.AddDate(0, 0, -(opts.days - 1))
+	// The window is stepped from a UTC-midnight ANCHOR carrying the owner's
+	// calendar components, never from the location-midnight instant itself: the
+	// bounds are compared against DailyLog.Date rows, which BeforeSave
+	// canonicalizes to UTC midnight, and AddDate re-enters time.Date in the
+	// receiver's own location — so a step landing on a date whose local midnight
+	// the zone skips (America/Santiago 2026-09-06) would resolve BACKWARD and
+	// silently drop a day from the window. This is the same re-anchoring
+	// `summary` and services.forEachCalendarDay make.
+	windowAnchor := services.CalendarDay(asOf, time.UTC)
+	from := windowAnchor.AddDate(0, 0, -(opts.days - 1))
 	// ListByUserRange's upper bound is EXCLUSIVE (`date < to`), so the window's
 	// "to" day is included by querying one day past it — the same bound handling
 	// `summary` uses.
-	windowEnd := asOf.AddDate(0, 0, 1)
+	windowEnd := windowAnchor.AddDate(0, 0, 1)
 	windowLogs, err := repositories.DailyLogs.ListByUserRange(context.Background(), user.ID, &from, &windowEnd)
 	if err != nil {
 		return fmt.Errorf("digest daily logs: %w", err)

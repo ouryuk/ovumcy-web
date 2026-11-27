@@ -100,13 +100,13 @@ func ownerClockZone(
 	userID uint,
 	override string,
 	overrideSet bool,
-) (location *time.Location, name string, err error) {
+) (*time.Location, string, error) {
 	if overrideSet {
-		location, name = resolveOperatorLocation(override)
+		location, name := resolveOperatorLocation(override)
 		return location, name, nil
 	}
 
-	user, found, err := users.FindByIDOptional(ctx, userID)
+	owner, found, err := users.FindByIDOptional(ctx, userID)
 	if err != nil {
 		return nil, "", fmt.Errorf("look up account timezone: %w", err)
 	}
@@ -114,7 +114,7 @@ func ownerClockZone(
 		return nil, "", fmt.Errorf("look up account timezone: %w", services.ErrOperatorUserNotFound)
 	}
 
-	location, name = resolveOperatorLocation(user.Timezone)
+	location, name := resolveOperatorLocation(owner.Timezone)
 	return location, name, nil
 }
 

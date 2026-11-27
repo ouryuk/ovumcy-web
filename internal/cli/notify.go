@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +18,12 @@ import (
 
 // notifyUsage is the single usage string for the notify command, returned for
 // every argument error so the contract is stable and testable.
-const notifyUsage = "usage: ovumcy notify [--dry-run] [--show-health-details] [--fail-on-delivery-error]"
+const notifyUsage = "usage: ovumcy notify [--dry-run] [--show-health-details] [--fail-on-delivery-error] [--preflight [--owner <id>] [--json]]"
+
+// notifyPreflightSchemaVersion tags the `--preflight --json` document so a
+// consumer can detect the shape before it touches anything in it, mirroring the
+// summary/export/predict document tags.
+const notifyPreflightSchemaVersion = "ovumcy-notify-preflight/v1"
 
 // notifyOptions holds the parsed notify flags.
 type notifyOptions struct {
@@ -36,6 +42,17 @@ type notifyOptions struct {
 	// single unreachable owner endpoint is an expected transient, not a pass
 	// failure.
 	failOnDeliveryError bool
+	// preflight switches the command from a delivery pass to a read-only
+	// diagnostic: it runs the SAME walk in dry-run mode (no request, no claim, no
+	// watermark) and reports, per owner, WHY their next reminder would or would
+	// not be delivered.
+	preflight bool
+	// preflightJSON renders the preflight as the versioned machine document
+	// instead of the human table.
+	preflightJSON bool
+	// owner filters the PRINTED preflight to one owner id (`--owner <id>`). The
+	// walk itself always covers every owner — see runNotifyPreflightCommand.
+	owner string
 }
 
 // notifyServiceRunner is the narrow behavior the command needs from the notify
@@ -43,6 +60,12 @@ type notifyOptions struct {
 // socket.
 type notifyServiceRunner interface {
 	RunOnce(ctx context.Context, now time.Time, location *time.Location, dryRun bool) (services.NotifyReport, error)
+}
+
+// notifyPreflightRunner is the read-only diagnostic seam. The service
+// implements it alongside RunOnce; a stub suffices for the command's tests.
+type notifyPreflightRunner interface {
+	NotifyPreflight(ctx context.Context, now time.Time, location *time.Location) (services.NotifyPreflightReport, error)
 }
 
 // RunNotifyCommand is the operator entry point for `ovumcy notify`: a
@@ -97,6 +120,9 @@ func RunNotifyCommand(
 	repositories, _ := buildRepositories(database, calendarFeedFencePath())
 	service := bootstrap.BuildNotifyService(repositories, []byte(secretKey), i18nManager, blockPrivateAddresses)
 
+	if opts.preflight {
+		return runNotifyPreflightCommand(service, opts, time.Now(), location, os.Stdout)
+	}
 	return runNotifyCommand(service, opts, time.Now(), location, os.Stdout)
 }
 
@@ -228,23 +254,62 @@ func formatOwnerIDs(ids []uint) string {
 }
 
 // parseNotifyArgs parses the notify flags, returning notifyUsage on any unknown
-// argument or positional. The command takes no positional arguments.
+// argument or positional. The command takes no positional arguments; --owner
+// takes a value, in either the `--owner <value>` or `--owner=<value>` spelling.
 func parseNotifyArgs(args []string) (notifyOptions, error) {
 	opts := notifyOptions{}
-	for _, arg := range args {
-		value := strings.TrimSpace(arg)
-		switch value {
-		case "":
+	for index := 0; index < len(args); index++ {
+		value := strings.TrimSpace(args[index])
+		switch {
+		case value == "":
 			continue
-		case "--dry-run":
+		case value == "--owner":
+			if index+1 >= len(args) {
+				return notifyOptions{}, errors.New(notifyUsage)
+			}
+			index++
+			opts.owner = strings.TrimSpace(args[index])
+			if !isNotifyOwnerID(opts.owner) {
+				return notifyOptions{}, errors.New(notifyUsage)
+			}
+		case value == "--dry-run":
 			opts.dryRun = true
-		case "--show-health-details":
+		case value == "--show-health-details":
 			opts.showHealthDetails = true
-		case "--fail-on-delivery-error":
+		case value == "--fail-on-delivery-error":
 			opts.failOnDeliveryError = true
+		case value == "--preflight":
+			opts.preflight = true
+		case value == "--json":
+			opts.preflightJSON = true
+		case strings.HasPrefix(value, "--owner="):
+			opts.owner = strings.TrimSpace(strings.TrimPrefix(value, "--owner="))
+			if !isNotifyOwnerID(opts.owner) {
+				return notifyOptions{}, errors.New(notifyUsage)
+			}
 		default:
 			return notifyOptions{}, errors.New(notifyUsage)
 		}
 	}
+	// The preflight is the read-only diagnostic; the delivery-pass flags describe
+	// a pass it never runs, so pairing them is a mistake worth refusing rather
+	// than silently ignoring (an operator reading --dry-run output would otherwise
+	// get a table and think they had asked for the preview).
+	if !opts.preflight && (opts.preflightJSON || opts.owner != "") {
+		return notifyOptions{}, errors.New(notifyUsage)
+	}
+	if opts.preflight && opts.failOnDeliveryError {
+		return notifyOptions{}, errors.New(notifyUsage)
+	}
 	return opts, nil
+}
+
+// isNotifyOwnerID reports whether value is a positive owner id — the only filter
+// spelling --owner accepts. The notify projection carries no email address (it is
+// the request-free pass's minimization, not an oversight), so accepting one here
+// would mean a second, different lookup against the accounts table for a command
+// whose whole point is that it reads nothing new.
+func isNotifyOwnerID(value string) bool {
+	parsed, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+	return err == nil && parsed > 0
 }

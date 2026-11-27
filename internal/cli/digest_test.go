@@ -186,9 +186,12 @@ Ciclos completados: 3
 
 ### Folicular
 
+- Sin síntomas destacados
 - Ánimo medio: 4.0 (3 registros)
 
 ### Ovulación
+
+- Sin síntomas destacados
 
 ### Lútea
 
@@ -540,7 +543,9 @@ func TestRunDigestCommandReportsAnOwnerWithNoHistory(t *testing.T) {
 }
 
 // TestRunDigestCommandRejectsAnUnknownAccount proves the shared operator
-// vocabulary still advises the operator, exactly as summary and predict do.
+// vocabulary is used unchanged: an unknown ADDRESS reports "not found" (it may
+// be a typo of an account that never existed) while an unknown ID points at
+// `users list`, exactly as summary and predict do.
 func TestRunDigestCommandRejectsAnUnknownAccount(t *testing.T) {
 	databasePath := createCLIUsersDatabase(t)
 	seedDigestFixture(t, databasePath)
@@ -550,8 +555,17 @@ func TestRunDigestCommandRejectsAnUnknownAccount(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected an unknown account to fail")
 	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected the shared not-found wording, got %q", err.Error())
+	}
+
+	var idOutput bytes.Buffer
+	err = runDigestCommand(db.Config{Driver: db.DriverSQLite, SQLitePath: databasePath}, testWebhookSecretKey, false, []string{"--id", "9999"}, &idOutput)
+	if err == nil {
+		t.Fatalf("expected an unknown id to fail")
+	}
 	if !strings.Contains(err.Error(), "users list") {
-		t.Fatalf("expected the shared operator advice, got %q", err.Error())
+		t.Fatalf("expected the id form to point at `users list`, got %q", err.Error())
 	}
 }
 

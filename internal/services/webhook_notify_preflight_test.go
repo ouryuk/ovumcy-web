@@ -409,3 +409,20 @@ func TestNotifyPreflightIsStatelessAcrossConcurrentWalks(t *testing.T) {
 		}
 	}
 }
+
+// TestNotifyPreflightPropagatesListingFailure proves the preflight reports a
+// listing failure rather than a silently empty (and therefore healthy-looking)
+// walk: an error from the owner listing is returned, not folded into a report of
+// zero owners.
+func TestNotifyPreflightPropagatesListingFailure(t *testing.T) {
+	repo := &stubNotifyRepo{listErr: errors.New("list owners: db down")}
+	service := newTestNotifyService(repo, stubLogReader{}, stubDecryptor{}, &stubDeliverer{})
+
+	report, err := service.NotifyPreflight(context.Background(), preflightNow, time.UTC)
+	if err == nil {
+		t.Fatalf("expected a listing error, got report %+v", report)
+	}
+	if len(report.Outcomes) != 0 {
+		t.Fatalf("a failed walk must not report outcomes, got %d", len(report.Outcomes))
+	}
+}

@@ -423,6 +423,7 @@ func TestParseNotifyArgsPreflight(t *testing.T) {
 		}},
 		{name: "owner missing value", args: []string{"--preflight", "--owner"}, wantErr: true},
 		{name: "owner must be an id", args: []string{"--preflight", "--owner", "owner@example.com"}, wantErr: true},
+		{name: "owner equals must be an id", args: []string{"--preflight", "--owner=owner@example.com"}, wantErr: true},
 		{name: "owner zero", args: []string{"--preflight", "--owner", "0"}, wantErr: true},
 		{name: "json without preflight", args: []string{"--json"}, wantErr: true},
 		{name: "owner without preflight", args: []string{"--owner", "7"}, wantErr: true},
@@ -646,4 +647,47 @@ func TestRunNotifyCommandEndToEndPreflight(t *testing.T) {
 	if err := RunNotifyCommand(config, testNotifySecretKey, "en", time.UTC, false, []string{"--preflight"}); err != nil {
 		t.Fatalf("zero-owner preflight should succeed, got %v", err)
 	}
+}
+
+// TestRunNotifyPreflightCommandCoversFallbacks drives the three branches of the
+// command that the happy-path tests never reach: an absent output writer (the
+// command must fall back to stdout rather than panic), a service error (it must
+// be wrapped, not swallowed) and a row carrying a detail (the table must render
+// reason:detail, the same spelling the JSON code field uses).
+func TestRunNotifyPreflightCommandCoversFallbacks(t *testing.T) {
+	now := time.Date(2026, 3, 12, 9, 0, 0, 0, time.UTC)
+
+	t.Run("nil output falls back without panicking", func(t *testing.T) {
+		// An unmatched filter returns before anything is printed, so this covers
+		// the nil-writer fallback without writing to the real stdout.
+		runner := &stubPreflightRunner{report: preflightFixtureReport()}
+		err := runNotifyPreflightCommand(runner, notifyOptions{preflight: true, owner: "99"}, now, time.UTC, nil)
+		if err == nil || !strings.Contains(err.Error(), "no owner matched") {
+			t.Fatalf("expected the unmatched-filter error, got %v", err)
+		}
+	})
+
+	t.Run("service error is wrapped", func(t *testing.T) {
+		runner := &stubPreflightRunner{err: errors.New("db down")}
+		err := runNotifyPreflightCommand(runner, notifyOptions{preflight: true}, now, time.UTC, &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "notify preflight failed") {
+			t.Fatalf("expected a wrapped preflight error, got %v", err)
+		}
+	})
+
+	t.Run("a detail renders as reason:detail", func(t *testing.T) {
+		report := services.NotifyPreflightReport{
+			Pass: services.NotifyReport{OwnersScanned: 1, DryRun: true},
+			Outcomes: []services.PreflightOutcome{
+				{OwnerID: 1, Host: "ntfy.example", Due: 0, Reason: services.PreflightReasonDeliveryFailed, Detail: "non_2xx", Actionable: true},
+			},
+		}
+		var out bytes.Buffer
+		if err := runNotifyPreflightCommand(&stubPreflightRunner{report: report}, notifyOptions{preflight: true}, now, time.UTC, &out); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(out.String(), "delivery_failed:non_2xx") {
+			t.Fatalf("table did not render the detail suffix: %q", out.String())
+		}
+	})
 }

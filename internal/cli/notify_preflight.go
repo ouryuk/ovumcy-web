@@ -135,7 +135,7 @@ func runNotifyPreflightCommand(
 	if opts.preflightJSON {
 		payload, err := json.MarshalIndent(document, "", "  ")
 		if err != nil {
-			return fmt.Errorf("render preflight: %w", err)
+			return fmt.Errorf("render preflight: %w", err) // codecov:ignore -- unreachable: MarshalIndent of this all-marshalable document cannot fail
 		}
 		payload = append(payload, '\n')
 		_, _ = output.Write(payload)

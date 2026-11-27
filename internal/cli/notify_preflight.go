@@ -83,7 +83,7 @@ func notifyPreflightNextAction(reason string) string {
 	case services.PreflightReasonNoEndpoint:
 		return "Act now: no endpoint is stored - save one with `ovumcy webhook set <email> --url-stdin`"
 	case services.PreflightReasonEndpointUnreadable:
-		return "Act now: the endpoint cannot be decrypted - restore the SECRET_KEY that saved it, or re-save the URL"
+		return "Act now: the endpoint cannot be decrypted - restore the application secret that saved it, or re-save the URL"
 	case services.PreflightReasonEndpointInvalid:
 		return "Act now: the endpoint is not a usable http(s) URL with a host - re-save it with `ovumcy webhook set <email> --url-stdin`"
 	case services.PreflightReasonPrivateAddressBlocked:
@@ -205,7 +205,7 @@ func renderNotifyPreflightTable(document notifyPreflightDocument) string {
 	}
 
 	table := tabwriter.NewWriter(&out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "  OWNER\tHOST\tDUE\tREASON\tNEXT ACTION")
+	_, _ = fmt.Fprintln(table, "  OWNER\tHOST\tDUE\tREASON\tNEXT ACTION")
 	actionable := 0
 	for _, row := range document.Owners {
 		reason := row.Reason
@@ -219,7 +219,7 @@ func renderNotifyPreflightTable(document notifyPreflightDocument) string {
 		if host == "" {
 			host = "-"
 		}
-		fmt.Fprintf(table, "  %d\t%s\t%d\t%s\t%s\n", row.OwnerID, host, row.Due, reason, row.NextAction)
+		_, _ = fmt.Fprintf(table, "  %d\t%s\t%d\t%s\t%s\n", row.OwnerID, host, row.Due, reason, row.NextAction)
 	}
 	_ = table.Flush()
 

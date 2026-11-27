@@ -188,7 +188,7 @@ Owners scanned: 3, listed: 3
   OWNER  HOST           DUE  REASON                   NEXT ACTION
   1      ntfy.example   1    ok                       Nothing to do: the next due reminder would be delivered
   2      10.0.0.5       0    private_address_blocked  Act now: the host is private and WEBHOOK_BLOCK_PRIVATE_ADDRESSES is on - point at a routable host or turn the gate off
-  3      -              0    endpoint_unreadable      Act now: the endpoint cannot be decrypted - restore the SECRET_KEY that saved it, or re-save the URL
+  3      -              0    endpoint_unreadable      Act now: the endpoint cannot be decrypted - restore the application secret that saved it, or re-save the URL
 
 2 owner(s) need attention, 1 need none.
 ```

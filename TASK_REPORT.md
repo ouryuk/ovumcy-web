@@ -32,14 +32,14 @@ Reason enum (published contract, `omumcy-notify-preflight/v1`):
 | key | meaning | actionable |
 | --- | --- | --- |
 | `ok` | a reminder is due and would be delivered (`due` = how many) | no |
-| `delivery_disabled` | the master switch is off | no (owner's choice) |
-| `no_endpoint` | enabled, but no endpoint stored | no (owner's choice) |
+| `delivery_disabled` | the master switch is off; re-enable with `ovumcy webhook set <email> --enabled=true` | **yes** |
+| `no_endpoint` | enabled, but no endpoint stored; save one with `ovumcy webhook set <email> --url-stdin` | **yes** |
 | `endpoint_unreadable` | ciphertext cannot be opened (SECRET_KEY rotation) | **yes** |
 | `endpoint_invalid` | unparseable / non-http(s) / hostless authority | **yes** |
-| `private_address_blocked` | private literal + `WEBHOOK_BLOCK_PRIVATE_ADDRESSES` | no (policy) |
+| `private_address_blocked` | private literal + `WEBHOOK_BLOCK_PRIVATE_ADDRESSES`; repoint the target or turn the gate off | **yes** |
 | `logs_unreadable` | the decision could not run | **yes** |
 | `predictions_suppressed` | unpredictability mode / pregnancy pause / overdue cycle | no (by design) |
-| `no_reminder_kind` | both reminder switches off | no (owner's choice) |
+| `no_reminder_kind` | both reminder switches off; enable one with `ovumcy webhook set <email> --notify-period=true` | **yes** |
 | `already_sent` | this cycle's watermark covers it | no |
 | `not_due` | nothing inside the lead window | no |
 | `delivery_failed` | only a real pass; `detail` = `transport_error` / `redirect_refused` / `non_2xx` / `scheme_not_allowed` / `private_address_blocked` / `claim_error` | **yes** |
@@ -49,9 +49,13 @@ Reason enum (published contract, `omumcy-notify-preflight/v1`):
 unreadable endpoint → endpoint shape/egress gate → unreadable logs → cycle state
 (`no_reminder_kind`, `predictions_suppressed`, `already_sent`, `not_due`) → `ok` → (real pass only)
 `delivery_failed` / `claim_lost`. Rationale: a structural block (can't decrypt, can't reach) is the
-defect worth fixing regardless of cycle state, so it outranks "nothing due"; a would-send verdict
-outranks a structural one only where a request would actually be attempted. `due` is always the
-decision's own count, so a blocked owner still shows how many reminders are waiting.
+defect worth fixing regardless of cycle state, so it outranks both "nothing due" and "would
+send". `actionable` means the reason names something a change in Ovumcy can fix — a configuration
+choice, a correctable defect, or a failed delivery — as opposed to a by-design gate
+(`predictions_suppressed`), a normal cycle state (`already_sent`, `not_due`), success (`ok`) or a
+concurrent pass winning the claim (`claim_lost`); the CLI's "Act now" prefix and its
+"N owner(s) need attention" count are exactly that flag. `due` is always the decision's own count,
+so a blocked owner still shows how many reminders are waiting.
 
 **Design call — reuse the dry-run path or walk separately?** A **dedicated read-only walk that
 reuses the same `run`**: `NotifyPreflight` calls `service.run(..., dryRun=true, recorder)` — the

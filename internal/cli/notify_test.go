@@ -391,9 +391,9 @@ func preflightFixtureReport() services.NotifyPreflightReport {
 		Pass: services.NotifyReport{OwnersScanned: 5, Due: 2, DryRun: true},
 		Outcomes: []services.PreflightOutcome{
 			{OwnerID: 1, Host: "ntfy.example", Due: 2, Reason: services.PreflightReasonOK, Actionable: false},
-			{OwnerID: 2, Host: "10.0.0.5", Due: 0, Reason: services.PreflightReasonPrivateAddressBlocked, Actionable: false},
+			{OwnerID: 2, Host: "10.0.0.5", Due: 0, Reason: services.PreflightReasonPrivateAddressBlocked, Actionable: true},
 			{OwnerID: 3, Host: "", Due: 0, Reason: services.PreflightReasonEndpointUnreadable, Actionable: true},
-			{OwnerID: 4, Host: "gotify.example", Due: 0, Reason: services.PreflightReasonDeliveryDisabled, Actionable: false},
+			{OwnerID: 4, Host: "gotify.example", Due: 0, Reason: services.PreflightReasonDeliveryDisabled, Actionable: true},
 			{OwnerID: 5, Host: "ntfy.example", Due: 0, Reason: services.PreflightReasonNotDue, Actionable: false},
 		},
 	}
@@ -473,7 +473,7 @@ func TestRunNotifyPreflightTable(t *testing.T) {
 		services.PreflightReasonEndpointUnreadable,
 		services.PreflightReasonDeliveryDisabled,
 		services.PreflightReasonNotDue,
-		"1 owner(s) need attention, 4 need none",
+		"3 owner(s) need attention, 2 need none",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("preflight table missing %q: %q", want, text)

@@ -324,7 +324,6 @@ func TestRunSummaryCommandArgumentErrorsExtended(t *testing.T) {
 		{"--days", "0"},  // outside the accepted windows
 		{"--days", "-7"}, // negative window
 		{"--days=90x"},   // equals form, non-numeric
-		{"--id", "0"},    // id 0 means "not given" → no target at all
 		{"--id=abc"},     // equals form, non-numeric
 	} {
 		var output bytes.Buffer
@@ -334,11 +333,20 @@ func TestRunSummaryCommandArgumentErrorsExtended(t *testing.T) {
 		}
 	}
 
+	// --id 0 is NOT a usage error: the flag was typed correctly and the value
+	// is the mistake, so it gets its own message (and never falls through to
+	// an email, see TestReadOnlyCommandsRefuseAnExplicitIDZero).
+	var zeroIDOutput bytes.Buffer
+	zeroIDErr := runSummaryCommand(config, []string{"--id", "0"}, &zeroIDOutput)
+	if zeroIDErr == nil || !strings.Contains(zeroIDErr.Error(), "positive account id") {
+		t.Fatalf("expected the non-positive-id message for --id 0, got %v", zeroIDErr)
+	}
+
 	// A display-name address is refused up front, before any database work.
 	var output bytes.Buffer
-	err := runSummaryCommand(config, []string{"Owner <a@example.com>"}, &output)
-	if err == nil || !strings.Contains(err.Error(), "invalid email address") {
-		t.Fatalf("expected invalid-email error, got %v", err)
+	outputErr := runSummaryCommand(config, []string{"Owner <a@example.com>"}, &output)
+	if outputErr == nil || !strings.Contains(outputErr.Error(), "invalid email address") {
+		t.Fatalf("expected invalid-email error, got %v", outputErr)
 	}
 }
 

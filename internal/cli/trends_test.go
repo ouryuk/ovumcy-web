@@ -245,12 +245,22 @@ func TestParseTrendsArgsRejectsBadInput(t *testing.T) {
 		}
 	}
 
+	// An omitted --tz is "use the owner's stored zone", not "UTC": tzSet has to
+	// stay false so the command can tell the two apart.
 	opts, err := parseTrendsArgs([]string{"owner@example.com", "--id=7", "--json"})
 	if err != nil {
 		t.Fatalf("parseTrendsArgs returned error: %v", err)
 	}
-	if opts.email != "owner@example.com" || opts.userID != 7 || opts.tz != "UTC" || !opts.asJSON {
+	if opts.email != "owner@example.com" || opts.userID != 7 || opts.tzSet || !opts.asJSON {
 		t.Fatalf("unexpected options: %+v", opts)
+	}
+	opts, err = parseTrendsArgs([]string{"owner@example.com", "--tz=Europe/Madrid"})
+	if err != nil || !opts.tzSet || opts.tz != "Europe/Madrid" {
+		t.Fatalf("expected an explicit --tz to be recorded, got %+v (%v)", opts, err)
+	}
+	// --id 0 is refused as a value error, never as a fall-through to the email.
+	if _, err := parseTrendsArgs([]string{"owner@example.com", "--id", "0"}); err == nil || !strings.Contains(err.Error(), "positive account id") {
+		t.Fatalf("expected the non-positive-id message for --id 0, got %v", err)
 	}
 }
 

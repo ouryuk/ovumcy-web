@@ -18,8 +18,9 @@ import (
 )
 
 // summaryUsage is the single usage string returned for every argument error so
-// the contract is stable and testable, mirroring exportUsage.
-const summaryUsage = "usage: ovumcy summary <email> [--id <id>] [--days 7|30|90] [--json]"
+// the contract is stable and testable, mirroring exportUsage. --tz overrides the
+// owner's stored zone for the window's end.
+const summaryUsage = "usage: ovumcy summary <email> [--id <id>] [--days 7|30|90] [--tz <IANA name>] [--json]"
 
 // summarySchemaVersion tags the --json payload so a consumer can detect which
 // shape of document it is reading before it touches anything in it, mirroring
@@ -31,9 +32,16 @@ const summarySchemaVersion = "ovumcy-summary/v1"
 // comparing an all-time number against a monthly habit.
 var summaryWindows = map[int]bool{7: true, 30: true, 90: true}
 
-// summaryNow resolves "today" for the window's end. It is a variable so tests
-// can pin the clock; production callers never touch it.
-var summaryNow = func() time.Time { return time.Now().UTC() }
+// summaryNow resolves the INSTANT the window is measured back from. It is a
+// variable so tests can pin the clock; production callers never touch it.
+//
+// The instant is converted into the OWNER's calendar day by
+// resolveOperatorLocation before the window is bounded. Anchoring the window's
+// end on time.Now().UTC() made the answer depend on the server's day: an owner
+// in America/Chicago asking at 20:00 local was summarised up to the UTC
+// tomorrow, so the window was off by one day — which is exactly the kind of
+// silent shift an adherence number must not have.
+var summaryNow = func() time.Time { return time.Now() }
 
 // summaryOptions holds the parsed `summary` arguments. The email/id pair is
 // resolved with the same vocabulary as `export` (resolveOperatorUser).
@@ -42,6 +50,10 @@ type summaryOptions struct {
 	email  string
 	days   int
 	asJSON bool
+	// tz is the --tz override; tzSet records that it was given, so an omitted
+	// --tz means "use the owner's stored zone" rather than an implicit UTC.
+	tz    string
+	tzSet bool
 }
 
 // SummaryDocument is the payload `ovumcy summary --json` emits and the same
@@ -116,7 +128,8 @@ func runSummaryCommand(databaseConfig db.Config, args []string, output io.Writer
 		return err
 	}
 
-	database, err := db.OpenDatabase(databaseConfig)
+	// Read-only: `summary` aggregates the owner's logs and never writes.
+	database, err := openCLIDatabase(databaseConfig, true)
 	if err != nil {
 		return fmt.Errorf("database init failed: %w", err)
 	}
@@ -138,8 +151,17 @@ func runSummaryCommand(databaseConfig db.Config, args []string, output io.Writer
 		return mapOperatorUserLookupError(err, opts.userID, opts.email)
 	}
 
+	// The window ends on the owner's OWN calendar day, resolved from the
+	// account's stored zone (falling back to UTC) unless --tz overrides it.
+	// ownerClockZone reads users.timezone from the full row: the summary this
+	// command holds carries no timezone field.
+	location, _, err := ownerClockZone(context.Background(), repositories.Users, user.ID, opts.tz, opts.tzSet)
+	if err != nil {
+		return fmt.Errorf("summary: %w", err)
+	}
+
 	to := summaryNow()
-	year, month, day := to.Date()
+	year, month, day := to.In(location).Date()
 	to = time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 	from := to.AddDate(0, 0, -(opts.days - 1))
 	// ListByUserRange's upper bound is EXCLUSIVE (`date < to`), so the window
@@ -167,14 +189,18 @@ func runSummaryCommand(databaseConfig db.Config, args []string, output io.Writer
 		if output == nil {
 			output = os.Stdout
 		}
-		_, _ = output.Write(payload)
+		if _, err := output.Write(payload); err != nil {
+			return fmt.Errorf("write summary: %w", err)
+		}
 		return nil
 	}
 
 	if output == nil {
 		output = os.Stdout
 	}
-	_, _ = io.WriteString(output, renderSummaryTable(document))
+	if _, err := io.WriteString(output, renderSummaryTable(document)); err != nil {
+		return fmt.Errorf("write summary: %w", err)
+	}
 	return nil
 }
 
@@ -205,7 +231,7 @@ func parseSummaryArgs(args []string) (summaryOptions, error) {
 		// --flag value form: consume the next argument as the value.
 		if !hasValue {
 			switch name {
-			case "id", "days":
+			case "id", "days", "tz":
 				if index+1 >= len(args) {
 					return summaryOptions{}, errors.New(summaryUsage)
 				}
@@ -221,11 +247,17 @@ func parseSummaryArgs(args []string) (summaryOptions, error) {
 
 		switch name {
 		case "id":
-			parsed, err := strconv.ParseUint(value, 10, 64)
+			parsed, err := parseOperatorUserID(value)
 			if err != nil {
+				return summaryOptions{}, summaryIDError(value)
+			}
+			opts.userID = parsed
+		case "tz":
+			if _, err := time.LoadLocation(value); err != nil {
 				return summaryOptions{}, errors.New(summaryUsage)
 			}
-			opts.userID = uint(parsed)
+			opts.tz = value
+			opts.tzSet = true
 		case "days":
 			parsed, err := strconv.Atoi(value)
 			if err != nil || !summaryWindows[parsed] {
@@ -239,10 +271,21 @@ func parseSummaryArgs(args []string) (summaryOptions, error) {
 		}
 	}
 
-	if opts.email == "" && opts.userID == 0 {
+	if opts.email == "" && !operatorUserIDSelected(opts.userID) {
 		return summaryOptions{}, errors.New(summaryUsage)
 	}
 	return opts, nil
+}
+
+// summaryIDError keeps the non-positive --id message apart from the usage
+// string, exactly as export does: the flag was typed correctly and the VALUE is
+// the mistake. Treating the id as unset is what used to let `--id 0 <email>`
+// summarise a different account than the one addressed.
+func summaryIDError(value string) error {
+	if _, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64); err == nil {
+		return errOperatorIDNotPositive(0)
+	}
+	return errors.New(summaryUsage)
 }
 
 // buildSummaryDocument aggregates the window from the resolved account's

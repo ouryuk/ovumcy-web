@@ -252,6 +252,11 @@ type WebhookNotifyService struct {
 	decryptor WebhookURLDecryptor
 	deliverer WebhookDeliverer
 	localized NotifyCopyProvider
+	// blockPrivateAddresses records the egress gate the DELIVERER was built
+	// with, so a read-only preflight can explain a private-address refusal it
+	// will never reach (it makes no request). It is configuration, not state:
+	// set once at construction and never written by a pass.
+	blockPrivateAddresses bool
 }
 
 // NewWebhookNotifyService assembles the notify service from its collaborators.
@@ -269,6 +274,16 @@ func NewWebhookNotifyService(
 		deliverer: deliverer,
 		localized: localized,
 	}
+}
+
+// WithPrivateAddressGate records the egress gate the service's deliverer was
+// built with and returns the service, so the preflight can name a
+// private-address refusal without the service ever importing the deliverer's
+// configuration. It is a construction-time setting; the bootstrap and the CLI
+// pass the same flag they hand NewWebhookDeliverer.
+func (service *WebhookNotifyService) WithPrivateAddressGate(block bool) *WebhookNotifyService {
+	service.blockPrivateAddresses = block
+	return service
 }
 
 // SendTest delivers ONE non-period, non-ovulation test notification to the
@@ -336,6 +351,14 @@ func (service *WebhookNotifyService) buildTestPayload(language string, eventDate
 // counted, logged host-only, and the pass continues to the next owner — one bad
 // endpoint never aborts every other owner's reminders.
 func (service *WebhookNotifyService) RunOnce(ctx context.Context, now time.Time, location *time.Location, dryRun bool) (NotifyReport, error) {
+	return service.run(ctx, now, location, dryRun, nil)
+}
+
+// run is the single walk RunOnce and NotifyPreflight share. recorder, when
+// non-nil, receives one outcome per owner — a diagnostic only: it is written
+// from the branches that already decided something, and it changes no delivery,
+// claim, mark, watermark, log line or counter.
+func (service *WebhookNotifyService) run(ctx context.Context, now time.Time, location *time.Location, dryRun bool, recorder *preflightRecorder) (NotifyReport, error) {
 	report := NotifyReport{DryRun: dryRun}
 
 	records, err := service.users.ListAllForNotify(ctx)
@@ -346,23 +369,36 @@ func (service *WebhookNotifyService) RunOnce(ctx context.Context, now time.Time,
 	for i := range records {
 		record := records[i]
 		report.OwnersScanned++
-		service.processOwner(ctx, record, now, location, dryRun, &report)
+		service.processOwner(ctx, record, now, location, dryRun, recorder, &report)
 	}
 	return report, nil
 }
 
 // processOwner runs the decision-and-delivery for a single owner, mutating the
 // aggregate report. All per-owner errors are contained here so the pass survives
-// a single bad endpoint.
+// a single bad endpoint. recorder, when non-nil, receives this owner's outcome;
+// recording is a pure observation of the branch already taken, never a new
+// decision.
 func (service *WebhookNotifyService) processOwner(
 	ctx context.Context,
 	record models.WebhookNotifyRecord,
 	now time.Time,
 	location *time.Location,
 	dryRun bool,
+	recorder *preflightRecorder,
 	report *NotifyReport,
 ) {
+	// observe records one outcome through the pass recorder, when one is attached.
+	// detail is the finer sub-reason a reason may carry (empty for most); it is
+	// part of the stable key only where webhook_notify_preflight.go documents it.
+	observe := func(host string, due int, reason string, detail string) {
+		if recorder != nil {
+			recorder.record(newPreflightOutcome(record.ID, host, due, reason, detail))
+		}
+	}
+
 	if !record.WebhookEnabled {
+		observe("", 0, PreflightReasonDeliveryDisabled, "")
 		return
 	}
 
@@ -374,16 +410,31 @@ func (service *WebhookNotifyService) processOwner(
 		// decrypt failure (e.g. SECRET_KEY rotation). Log the owner id only — the
 		// error may not carry the URL, but we never risk it.
 		log.Printf("webhook notify: decrypt failed, skipping owner id=%d", record.ID)
+		observe("", 0, PreflightReasonEndpointUnreadable, "")
 		return
 	}
 	if strings.TrimSpace(decryptedURL) == "" {
 		// Enabled but no endpoint stored: nothing deliverable.
+		observe("", 0, PreflightReasonNoEndpoint, "")
 		return
+	}
+
+	// Destination HOST only, for the dry-run preview, the preflight and any
+	// host-scoped logging. Never keep or print more of the URL than this.
+	host := hostOnly(decryptedURL)
+
+	// The endpoint shape the deliverer would refuse before any request leaves (and
+	// the private-literal half of the egress gate). Checked here only to EXPLAIN a
+	// target that cannot be delivered to; it changes nothing about the pass itself,
+	// which still hands the URL to the deliverer and records its verdict.
+	if reason := classifyPreflightEndpoint(decryptedURL, service.blockPrivateAddresses); reason != "" {
+		observe(host, 0, reason, "")
 	}
 
 	dayLogs, err := service.logs.ListByUser(ctx, record.ID)
 	if err != nil {
 		log.Printf("webhook notify: load logs failed, skipping owner id=%d", record.ID)
+		observe(host, 0, PreflightReasonLogsUnreadable, "")
 		return
 	}
 
@@ -398,9 +449,23 @@ func (service *WebhookNotifyService) processOwner(
 	due, watermarkSuppressed := decideDueReminders(&user, settings, dayLogs, now, ownerLocation)
 	report.SkippedIdempotent += watermarkSuppressed
 
-	// Destination HOST only, for the dry-run preview and any host-scoped logging.
-	// Never keep or print more of the URL than this.
-	host := hostOnly(decryptedURL)
+	switch {
+	case len(due) == 0 && !ownerKindsEnabled(record):
+		observe(host, 0, PreflightReasonNoReminderKind, "")
+	case len(due) == 0:
+		// The decision emits nothing either because the medical-safety gate
+		// suppressed predictions for this owner or because no reminder is inside the
+		// lead window (and, when every candidate was witheld by its own watermark,
+		// because it was already sent). Decide which by asking the suppression
+		// predicate the decision itself consults — never a second prediction pass.
+		if suppression := ResolvePredictionSuppression(&user, BuildCycleStatsFromLogs(&user, dayLogs, now, ownerLocation)); suppression.PredictionsSuppressed {
+			observe(host, 0, PreflightReasonPredictionsSuppressed, "")
+		} else {
+			observe(host, 0, preflightPendingReason(watermarkSuppressed), "")
+		}
+	default:
+		observe(host, len(due), PreflightReasonOK, "")
+	}
 
 	for _, reminder := range due {
 		report.Due++
@@ -439,6 +504,7 @@ func (service *WebhookNotifyService) processOwner(
 			// and no watermark moved, so the reminder is still pending — counted as
 			// failed so an operator sees it, and retried by the next pass.
 			log.Printf("webhook notify: watermark claim failed, owner id=%d", record.ID)
+			observe(host, len(due), PreflightReasonDeliveryFailed, "claim_error")
 			report.Failed++
 			report.OwnerIDsFailed = appendUniqueID(report.OwnerIDsFailed, record.ID)
 			continue
@@ -454,6 +520,7 @@ func (service *WebhookNotifyService) processOwner(
 			// the owner whose endpoint was revoked, and the correct action is
 			// identical.
 			report.SkippedIdempotent++
+			observe(host, len(due), PreflightReasonClaimLost, "")
 			continue
 		}
 
@@ -462,6 +529,13 @@ func (service *WebhookNotifyService) processOwner(
 			// the watermark is left where this pass found it and the next pass retries;
 			// a claim kept after a failed POST would read exactly like a successful send
 			// and suppress the reminder for good.
+			//
+			// delivererReason is the key Deliver already printed for this failure
+			// (transport_error, redirect_refused, non_2xx, scheme_not_allowed,
+			// private_address_blocked); it is recorded for the preflight and changes
+			// neither the log line nor the counters below.
+			delivererReason := classifyNotifyDeliveryError(err)
+			observe(host, len(due), PreflightReasonDeliveryFailed, delivererReason)
 			report.Failed++
 			report.OwnerIDsFailed = appendUniqueID(report.OwnerIDsFailed, record.ID)
 			if releaseErr := service.users.ReleaseWebhookWatermark(ctx, record.ID, reminder.Type, reminder.CycleAnchor, previousWatermark); releaseErr != nil {

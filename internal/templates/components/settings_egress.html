@@ -159,6 +159,47 @@
       </div>
       {{end}}
 
+      {{/* The delivery history: what actually happened to the reminders this
+           endpoint was supposed to receive (migration 040).
+
+           It is here, under the endpoint, because it is EVIDENCE about that
+           endpoint — the answer to "did it go out?" and, when it did not, "why
+           not?". The old page could only say when the last ACCEPTED delivery
+           happened, which is silence about every attempt after it.
+
+           The alert appears only when the NEWEST attempt failed. A failed
+           attempt followed by a successful one is a retry that worked, and
+           announcing it as an outage would be a lie the owner can disprove by
+           looking one row down.
+
+           Nothing here names the URL: the row carries the destination's host
+           alone, and the failure carries a bounded CLASS. The list is drawn
+           from the page's own render, so it needs no fetch of its own. */}}
+      {{if .WebhookDeliveries.HasRows}}
+      <div class="space-y-2" data-webhook-deliveries>
+        {{if .WebhookDeliveries.ShowFailureNotice}}
+        <p class="status-error" data-webhook-deliveries-failure-notice>{{t .Messages .WebhookDeliveries.FailureNoticeKey}} <time datetime="{{(index .WebhookDeliveries.Rows 0).OccurredISO}}">{{.WebhookDeliveries.FailureNoticeText}}</time></p>
+        {{end}}
+        <h4 class="field-label">{{t .Messages "settings.webhook.deliveries.title"}}</h4>
+        <ul class="space-y-2" data-webhook-deliveries-list>
+          {{range .WebhookDeliveries.Rows}}
+          <li class="space-y-1" data-webhook-delivery-row>
+            <div class="flex flex-wrap items-center gap-2">
+              <time class="journal-muted text-sm" datetime="{{.OccurredISO}}">{{.OccurredText}}</time>
+              <span class="text-sm">{{t $.Messages .KindKey}}</span>
+              <span class="{{.OutcomeClass}}" data-webhook-delivery-outcome>{{t $.Messages .OutcomeKey}}</span>
+            </div>
+            {{if .DetailKey}}
+            <p class="journal-muted text-sm" data-webhook-delivery-detail>
+              {{t $.Messages .DetailKey}}{{if .DetailText}} {{.DetailText}}{{end}}
+            </p>
+            {{end}}
+          </li>
+          {{end}}
+        </ul>
+      </div>
+      {{end}}
+
       {{/* Withdrawing the endpoint is its own request, not a checkbox on the
            save. The save rewrites both per-kind opt-ins from whatever the form
            carried, and while ENABLING it cannot act at all on a row this

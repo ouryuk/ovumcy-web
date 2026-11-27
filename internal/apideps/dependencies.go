@@ -31,6 +31,11 @@ type Dependencies struct {
 	SettingsViewService    *services.SettingsViewService
 	WebhookSettingsService *services.WebhookSettingsService
 	WebhookNotifyService   *services.WebhookNotifyService
+	// WebhookDeliveryHistory is the owner-visible webhook delivery history
+	// (migration 040). It is a separate dependency from the notify service
+	// because it serves a READ path (the Settings list and its API) that has
+	// nothing to do with running a delivery pass.
+	WebhookDeliveryHistory *services.WebhookDeliveryHistory
 	OnboardingService      *services.OnboardingService
 	SetupService           *services.SetupService
 	TOTPService            *services.TOTPService
@@ -81,6 +86,7 @@ func (dependencies Dependencies) requirements() []dependencyRequirement {
 		{value: dependencies.SettingsViewService, message: "settings view service is required"},
 		{value: dependencies.WebhookSettingsService, message: "webhook settings service is required"},
 		{value: dependencies.WebhookNotifyService, message: "webhook notify service is required"},
+		{value: dependencies.WebhookDeliveryHistory, message: "webhook delivery history is required"},
 		{value: dependencies.OnboardingService, message: "onboarding service is required"},
 		{value: dependencies.SetupService, message: "setup service is required"},
 		{value: dependencies.TOTPService, message: "totp service is required"},

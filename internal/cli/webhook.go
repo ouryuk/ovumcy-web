@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ovumcy/ovumcy-web/internal/db"
+	"github.com/ovumcy/ovumcy-web/internal/models"
 	"github.com/ovumcy/ovumcy-web/internal/services"
 )
 
@@ -142,13 +143,22 @@ func openWebhookCLIService(databaseConfig db.Config, secretKey string) (*service
 
 	repositories, _ := buildRepositories(database, calendarFeedFencePath())
 	settingsService := services.NewWebhookSettingsService(repositories.Users, []byte(secretKey))
-	cliService := services.NewWebhookSettingsCLIService(repositories.Users, settingsService)
+	cliService := services.NewWebhookSettingsCLIService(repositories.Users, settingsService).
+		WithDeliveryHistory(repositories.WebhookDeliveries)
 	cleanup := func() { _ = sqlDB.Close() }
 	return cliService, cleanup, nil
 }
 
 // runWebhookShow prints the owner's webhook status: configured/not and the
-// destination HOST only — never the full URL, path, query, or token.
+// destination HOST only — never the full URL, path, query, or token — followed
+// by the latest delivery outcomes.
+//
+// The outcomes are appended, not merged into the status block: the status
+// answers "what is configured" and the outcomes answer "what happened", and an
+// operator who only wants the first still gets it in the same shape as before.
+// A history that cannot be read is reported on its own line and does NOT fail
+// the command — the settings were read successfully, and losing the status
+// report because of a separate, optional read would be the worse outcome.
 func runWebhookShow(service *services.WebhookSettingsCLIService, email string, output io.Writer) error {
 	view, err := service.ResolveWebhookSettings(context.Background(), email)
 	if err != nil {
@@ -158,7 +168,74 @@ func runWebhookShow(service *services.WebhookSettingsCLIService, email string, o
 		output = os.Stdout
 	}
 	printWebhookStatus(output, email, view)
+	printWebhookDeliveries(service, email, output)
 	return nil
+}
+
+// webhookCLIDeliveryLines is how many recent outcomes `webhook show` appends.
+// Three is deliberate: enough to show a run of failures beside a success, and
+// short enough to stay readable in a terminal without a second screen.
+const webhookCLIDeliveryLines = 3
+
+// printWebhookDeliveries appends the latest delivery outcomes to the show
+// output.
+//
+// It prints the time, the kind, the outcome, and — when the attempt did not
+// deliver — the status code or the bounded failure class. It never prints a
+// URL: the history carries the destination host alone, and this prints even
+// less of it, because the operator already knows which endpoint the status
+// block above named.
+func printWebhookDeliveries(service *services.WebhookSettingsCLIService, email string, output io.Writer) {
+	deliveries, err := service.ResolveWebhookDeliveries(context.Background(), email, webhookCLIDeliveryLines)
+	if err != nil {
+		// Reported, not fatal: the status above was printed from a successful
+		// read, and a failed optional read must not fail the command.
+		_, _ = fmt.Fprintf(output, "  delivery history: unavailable (%s)\n", webhookDeliveryReadErrorReason(err))
+		return
+	}
+	if len(deliveries) == 0 {
+		return
+	}
+
+	_, _ = fmt.Fprintf(output, "  recent deliveries:\n")
+	for _, delivery := range deliveries {
+		_, _ = fmt.Fprintf(
+			output,
+			"    %s  %-9s  %-8s  %s\n",
+			delivery.OccurredAt.UTC().Format("2006-01-02 15:04"),
+			delivery.ReminderKind,
+			delivery.Outcome,
+			webhookDeliveryDetailLine(delivery),
+		)
+	}
+}
+
+// webhookDeliveryDetailLine renders the failure detail of one attempt: the
+// status code when the endpoint answered, the bounded class when it did not,
+// and a plain dash when the attempt succeeded (a success needs no detail).
+func webhookDeliveryDetailLine(delivery services.WebhookDeliveryOutcomeView) string {
+	if delivery.Outcome == models.WebhookDeliveryOutcomeOK {
+		return "-"
+	}
+	if delivery.HTTPStatus > 0 {
+		return fmt.Sprintf("http_status=%d", delivery.HTTPStatus)
+	}
+	if delivery.ErrorClass == "" {
+		return "-"
+	}
+	return "error_class=" + delivery.ErrorClass
+}
+
+// webhookDeliveryReadErrorReason reduces a history read failure to a short,
+// stable reason. The error is never printed verbatim: a storage error can quote
+// the row it could not read, and a row names an owner.
+func webhookDeliveryReadErrorReason(err error) string {
+	switch {
+	case errors.Is(err, services.ErrWebhookOwnerNotFound):
+		return "owner not found"
+	default:
+		return "read failed"
+	}
 }
 
 // runWebhookSet applies the parsed patch (merged onto the current settings by

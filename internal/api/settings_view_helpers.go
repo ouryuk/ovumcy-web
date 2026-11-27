@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -73,6 +74,24 @@ func (handler *Handler) buildSettingsViewData(c fiber.Ctx, user *models.User, fl
 	// Regression: TestSettingsViewDataNamesNoEgressKeyForANonOwner.
 	if viewData.HasOwnerEgressLedger {
 		data["Egress"] = buildSettingsEgressView(c, viewData.Egress, location)
+	}
+
+	// The delivery history is projected the same way: past the owner gate, as
+	// ONE key, so a non-owner session receives an absent key rather than a
+	// false one.
+	//
+	// The read is BEST EFFORT here too, and deliberately so: a history that
+	// cannot be read must not take the Settings page down with it. The list is
+	// evidence about past deliveries, and a page that renders without it is a
+	// page with one thing missing — a far better outcome than a 500 on a
+	// settings page that also carries the password change and the data wipe.
+	if handler.webhookDeliveryHist != nil {
+		deliveries, err := handler.webhookDeliveryHist.List(c.Context(), user.ID, services.WebhookDeliveryRingSize)
+		if err != nil {
+			log.Printf("settings view: webhook delivery history read failed, owner id=%d", user.ID)
+		} else {
+			data["WebhookDeliveries"] = buildSettingsWebhookDeliveriesView(language, location, deliveries)
+		}
 	}
 
 	if viewData.HasOwnerExportViewState {

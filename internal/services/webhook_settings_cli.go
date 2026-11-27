@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ovumcy/ovumcy-web/internal/models"
 )
@@ -106,6 +107,11 @@ func (patch *WebhookSettingsPatch) ClearURL() {
 type WebhookSettingsCLIService struct {
 	reader   WebhookOwnerReader
 	settings *WebhookSettingsService
+	// deliveries is the owner-visible delivery history (migration 040), read
+	// for the `show` command's outcome lines. It is OPTIONAL: a service
+	// without one still resolves settings and still prints them, so the CLI
+	// works against a build that predates the history.
+	deliveries WebhookDeliveryRecorder
 }
 
 // NewWebhookSettingsCLIService builds the CLI orchestration from an owner reader
@@ -113,6 +119,101 @@ type WebhookSettingsCLIService struct {
 // decrypt). Both collaborate over the same *db.UserRepository in production.
 func NewWebhookSettingsCLIService(reader WebhookOwnerReader, settings *WebhookSettingsService) *WebhookSettingsCLIService {
 	return &WebhookSettingsCLIService{reader: reader, settings: settings}
+}
+
+// WithDeliveryHistory attaches the owner-visible delivery history to the CLI
+// service and returns it, so a caller can wire it in one expression.
+//
+// It is optional on purpose: without it the `show` command prints the settings
+// and no outcome lines, which is exactly what a build that predates the
+// history can do.
+func (service *WebhookSettingsCLIService) WithDeliveryHistory(recorder WebhookDeliveryRecorder) *WebhookSettingsCLIService {
+	service.deliveries = recorder
+	return service
+}
+
+// WebhookDeliveryOutcomeView is one delivery attempt as the CLI prints it.
+//
+// It is the same redaction the API applies: the destination's host, the
+// outcome, the status code and the bounded failure class. No URL, no path, no
+// query, no token, and no error text — an operator reading this output is
+// reading it in a terminal that may be in a scrollback buffer.
+type WebhookDeliveryOutcomeView struct {
+	// OccurredAt is the attempt's time.
+	OccurredAt time.Time
+	// ReminderKind is one of the models.WebhookDeliveryKind* values.
+	ReminderKind string
+	// Outcome is one of the models.WebhookDeliveryOutcome* values.
+	Outcome string
+	// HTTPStatus is the endpoint's own status code, or 0 when there was no
+	// response.
+	HTTPStatus int
+	// ErrorClass is the bounded failure class, or "" when the attempt did not
+	// fail.
+	ErrorClass string
+	// EndpointHost is the destination host alone.
+	EndpointHost string
+}
+
+// ResolveWebhookDeliveries returns the owner's newest delivery attempts, newest
+// first, at most limit of them.
+//
+// It is a SEPARATE call from ResolveWebhookSettings on purpose: the settings
+// view is the answer to "what is configured", the deliveries are the answer to
+// "what happened", and the second must never be able to fail the first — an
+// unreadable history is a missing list, not a failed status command.
+//
+// A service without a history returns an empty list and no error: there is
+// nothing to show, and that is not a failure.
+func (service *WebhookSettingsCLIService) ResolveWebhookDeliveries(ctx context.Context, email string, limit int) ([]WebhookDeliveryOutcomeView, error) {
+	owner, err := service.resolveOwnerID(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+	if service.deliveries == nil {
+		return nil, nil
+	}
+
+	rows, err := service.deliveries.ListRecentWebhookDeliveries(ctx, owner, limit)
+	if err != nil {
+		return nil, fmt.Errorf("read webhook delivery history: %w", err)
+	}
+
+	views := make([]WebhookDeliveryOutcomeView, 0, len(rows))
+	for _, row := range rows {
+		views = append(views, WebhookDeliveryOutcomeView{
+			OccurredAt:   row.OccurredAt,
+			ReminderKind: row.ReminderKind,
+			Outcome:      row.Outcome,
+			HTTPStatus:   row.HTTPStatus,
+			ErrorClass:   row.ErrorClass,
+			EndpointHost: row.EndpointHost,
+		})
+	}
+	return views, nil
+}
+
+// resolveOwnerID resolves the owner by normalized email and returns only their
+// id. It is the shared lookup of ResolveWebhookDeliveries, so the delivery
+// history is read for exactly the owner the email names — there is no path by
+// which the history could be read for anyone else.
+func (service *WebhookSettingsCLIService) resolveOwnerID(ctx context.Context, email string) (uint, error) {
+	normalizedEmail, err := normalizeOperatorUserEmail(email)
+	if err != nil {
+		return 0, err
+	}
+	owner, found, err := resolveUniqueUserByEmail(ctx, service.reader, normalizedEmail)
+	if err != nil {
+		var ambiguous *AmbiguousEmailError
+		if errors.As(err, &ambiguous) {
+			return 0, err
+		}
+		return 0, fmt.Errorf("%w: %v", ErrOperatorUserLookupFailed, err)
+	}
+	if !found {
+		return 0, ErrWebhookOwnerNotFound
+	}
+	return owner.ID, nil
 }
 
 // ResolveWebhookSettings loads the current webhook settings for the owner with

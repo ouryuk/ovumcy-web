@@ -252,6 +252,13 @@ type WebhookNotifyService struct {
 	decryptor WebhookURLDecryptor
 	deliverer WebhookDeliverer
 	localized NotifyCopyProvider
+	// history is the owner-visible delivery history (migration 040). It is a
+	// separate seam from users on purpose: the history is BEST EFFORT and must
+	// never be able to alter a delivery's outcome, which is a property of the
+	// CALL SITE (every write is swallowed) rather than of the repository. A
+	// nil history disables the recording entirely, so a partially wired
+	// instance delivers exactly as it did before the history existed.
+	history *WebhookDeliveryHistory
 }
 
 // NewWebhookNotifyService assembles the notify service from its collaborators.
@@ -269,6 +276,16 @@ func NewWebhookNotifyService(
 		deliverer: deliverer,
 		localized: localized,
 	}
+}
+
+// WithDeliveryHistory attaches the owner-visible delivery history to the
+// notify service and returns the service, so a caller can wire it in one
+// expression. It is a separate step rather than a constructor argument
+// because the history is OPTIONAL: a service without one delivers exactly as
+// before, and the existing callers and tests keep their shape.
+func (service *WebhookNotifyService) WithDeliveryHistory(history *WebhookDeliveryHistory) *WebhookNotifyService {
+	service.history = history
+	return service
 }
 
 // SendTest delivers ONE non-period, non-ovulation test notification to the
@@ -299,10 +316,61 @@ func (service *WebhookNotifyService) SendTest(ctx context.Context, record models
 
 	ownerLocation := resolveOwnerLocation(record.Timezone, location)
 	eventDate := now.In(ownerLocation)
-	if err := service.deliverer.Deliver(ctx, decryptedURL, service.buildTestPayload(record.InterfaceLanguage, eventDate)); err != nil {
+	outcome, err := service.deliver(ctx, decryptedURL, service.buildTestPayload(record.InterfaceLanguage, eventDate))
+	// The test delivery is recorded in the owner-visible history like any
+	// other attempt, and it is recorded under its OWN kind (test): a test
+	// message is not a period or ovulation reminder and must never be read as
+	// one by anything routing on the kind.
+	service.recordDelivery(ctx, record.ID, models.WebhookDeliveryKindTest, outcome, err == nil, now)
+	if err != nil {
 		return ErrWebhookTestDeliveryFailed
 	}
 	return nil
+}
+
+// deliver performs one delivery and reports what it amounted to.
+//
+// The deliverer is asked for its outcome through the OPTIONAL
+// WebhookOutcomeDeliverer extension when it implements it, and through the
+// plain Deliver seam otherwise. The fallback is not a guess: it reports a
+// transport-class failure and the destination host, which is what a stub (or
+// any future deliverer that does not implement the extension) can honestly
+// say. The history is then truthful about "we do not know more than this",
+// rather than silently recording a success it never observed.
+//
+// The error is returned UNCHANGED, so the callers keep classifying it exactly
+// as they did before the history existed.
+func (service *WebhookNotifyService) deliver(ctx context.Context, decryptedURL string, payload WebhookPayload) (WebhookDeliveryOutcome, error) {
+	if reporter, ok := service.deliverer.(WebhookOutcomeDeliverer); ok {
+		return reporter.DeliverWithOutcome(ctx, decryptedURL, payload)
+	}
+	err := service.deliverer.Deliver(ctx, decryptedURL, payload)
+	outcome := WebhookDeliveryOutcome{Host: hostOnly(decryptedURL)}
+	if err != nil {
+		outcome.ErrorClass = models.WebhookDeliveryErrorTransport
+	}
+	return outcome, err
+}
+
+// recordDelivery writes one delivery attempt into the owner-visible history.
+//
+// It is BEST EFFORT and swallows everything: a history that cannot be written
+// must not change what the caller believes about the delivery. The failure is
+// logged inside Record, and the caller here learns nothing about it — which is
+// the point of the whole arrangement: the delivery's outcome is decided by the
+// transport, not by this instance's ability to keep a note of it.
+func (service *WebhookNotifyService) recordDelivery(
+	ctx context.Context,
+	userID uint,
+	kind string,
+	outcome WebhookDeliveryOutcome,
+	delivered bool,
+	occurredAt time.Time,
+) {
+	if service.history == nil {
+		return
+	}
+	service.history.RecordDeliveryOutcome(ctx, userID, kind, outcome, delivered, occurredAt)
 }
 
 // buildTestPayload assembles the fixed, health-free test body. It shares the
@@ -457,7 +525,13 @@ func (service *WebhookNotifyService) processOwner(
 			continue
 		}
 
-		if err := service.deliverer.Deliver(ctx, decryptedURL, payload); err != nil {
+		outcome, deliveryErr := service.deliver(ctx, decryptedURL, payload)
+		// The attempt is recorded in the owner-visible history whether it
+		// succeeded or not, and BEFORE the branch below decides what the
+		// delivery means for the watermark. The recording is best effort and
+		// cannot change either answer.
+		service.recordDelivery(ctx, record.ID, deliveryKindForReminder(reminder.Type), outcome, deliveryErr == nil, now)
+		if deliveryErr != nil {
 			// Delivery already logged host-only inside Deliver. Give the claim back so
 			// the watermark is left where this pass found it and the next pass retries;
 			// a claim kept after a failed POST would read exactly like a successful send
@@ -512,6 +586,22 @@ func watermarkForReminderType(settings WebhookReminderSettings, reminderType str
 		return settings.OvulationWatermark
 	}
 	return settings.PeriodWatermark
+}
+
+// deliveryKindForReminder maps a reminder's decision-layer type to the kind
+// the delivery history records.
+//
+// The two kinds the decision layer produces are period and ovulation, and
+// anything else falls to the period kind — the decision layer has no third
+// reminder type, so the fallback names a kind that exists rather than
+// inventing one. The history's own THIRD kind (test) is written by the
+// test-send path, never here: a test message is not a reminder and must
+// never be read as one.
+func deliveryKindForReminder(reminderType string) string {
+	if reminderType == DueReminderTypeOvulation {
+		return models.WebhookDeliveryKindOvulation
+	}
+	return models.WebhookDeliveryKindPeriod
 }
 
 // buildPayload turns a due reminder into the transport-free notification body.

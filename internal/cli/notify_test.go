@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"regexp"
@@ -366,4 +367,327 @@ func TestRunNotifyCommandReportsDatabaseInitFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a database init failure, got nil")
 	}
+}
+
+// stubPreflightRunner stands in for the read-only diagnostic: it records the call
+// and returns a canned report, so the command's rendering is testable without a
+// DB, a decrypt key, or a socket.
+type stubPreflightRunner struct {
+	report services.NotifyPreflightReport
+	err    error
+	called bool
+}
+
+func (stub *stubPreflightRunner) NotifyPreflight(_ context.Context, _ time.Time, _ *time.Location) (services.NotifyPreflightReport, error) {
+	stub.called = true
+	return stub.report, stub.err
+}
+
+// preflightFixtureReport is the shared fixture: one owner per reason class the
+// printer has to render — deliverable, blocked by the egress gate, unreadable
+// ciphertext, silent by configuration, and silently fine.
+func preflightFixtureReport() services.NotifyPreflightReport {
+	return services.NotifyPreflightReport{
+		Pass: services.NotifyReport{OwnersScanned: 5, Due: 2, DryRun: true},
+		Outcomes: []services.PreflightOutcome{
+			{OwnerID: 1, Host: "ntfy.example", Due: 2, Reason: services.PreflightReasonOK, Actionable: false},
+			{OwnerID: 2, Host: "10.0.0.5", Due: 0, Reason: services.PreflightReasonPrivateAddressBlocked, Actionable: true},
+			{OwnerID: 3, Host: "", Due: 0, Reason: services.PreflightReasonEndpointUnreadable, Actionable: true},
+			{OwnerID: 4, Host: "gotify.example", Due: 0, Reason: services.PreflightReasonDeliveryDisabled, Actionable: true},
+			{OwnerID: 5, Host: "ntfy.example", Due: 0, Reason: services.PreflightReasonNotDue, Actionable: false},
+		},
+	}
+}
+
+// TestParseNotifyArgsPreflight pins the flag contract: the preflight flags parse,
+// and the pairings that would mislead an operator are refused rather than
+// silently reinterpreted.
+func TestParseNotifyArgsPreflight(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		wantErr bool
+		check   func(notifyOptions) bool
+	}{
+		{name: "plain preflight", args: []string{"--preflight"}, check: func(o notifyOptions) bool {
+			return o.preflight && !o.preflightJSON && o.owner == "" && !o.dryRun
+		}},
+		{name: "preflight json", args: []string{"--preflight", "--json"}, check: func(o notifyOptions) bool {
+			return o.preflight && o.preflightJSON
+		}},
+		{name: "owner spaced", args: []string{"--preflight", "--owner", "7"}, check: func(o notifyOptions) bool {
+			return o.preflight && o.owner == "7"
+		}},
+		{name: "owner equals", args: []string{"--preflight", "--owner=7"}, check: func(o notifyOptions) bool {
+			return o.preflight && o.owner == "7"
+		}},
+		{name: "owner missing value", args: []string{"--preflight", "--owner"}, wantErr: true},
+		{name: "owner must be an id", args: []string{"--preflight", "--owner", "owner@example.com"}, wantErr: true},
+		{name: "owner equals must be an id", args: []string{"--preflight", "--owner=owner@example.com"}, wantErr: true},
+		{name: "owner zero", args: []string{"--preflight", "--owner", "0"}, wantErr: true},
+		{name: "json without preflight", args: []string{"--json"}, wantErr: true},
+		{name: "owner without preflight", args: []string{"--owner", "7"}, wantErr: true},
+		{name: "preflight with fail-on-delivery-error", args: []string{"--preflight", "--fail-on-delivery-error"}, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts, err := parseNotifyArgs(tc.args)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected a usage error, got %+v", opts)
+				}
+				if !strings.Contains(err.Error(), "usage: ovumcy notify") {
+					t.Fatalf("expected the usage string, got %q", err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !tc.check(opts) {
+				t.Fatalf("options did not match expectation: %+v", opts)
+			}
+		})
+	}
+}
+
+// TestRunNotifyPreflightTable is the human half: every owner row carries the id,
+// the host, the due count and a reason, and the output never carries a URL,
+// scheme, token, or an estimated date.
+func TestRunNotifyPreflightTable(t *testing.T) {
+	runner := &stubPreflightRunner{report: preflightFixtureReport()}
+	var out bytes.Buffer
+	if err := runNotifyPreflightCommand(runner, notifyOptions{preflight: true}, time.Date(2026, 3, 12, 9, 0, 0, 0, time.UTC), time.UTC, &out); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !runner.called {
+		t.Fatal("preflight was never invoked")
+	}
+	text := out.String()
+
+	for _, want := range []string{
+		"ovumcy-notify-preflight/v1",
+		"no request sent",
+		"Owners scanned: 5, listed: 5",
+		"ntfy.example",
+		"10.0.0.5",
+		services.PreflightReasonEndpointUnreadable,
+		services.PreflightReasonDeliveryDisabled,
+		services.PreflightReasonNotDue,
+		"3 owner(s) need attention, 2 need none",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("preflight table missing %q: %q", want, text)
+		}
+	}
+
+	for _, banned := range []string{"http://", "https://", "token", "webhook_url", "SECRET"} {
+		if strings.Contains(text, banned) {
+			t.Fatalf("preflight table leaked %q: %q", banned, text)
+		}
+	}
+	if match := notifyEventDatePattern.FindString(text); match != "" {
+		t.Fatalf("preflight table printed an estimated date %q: %q", match, text)
+	}
+	for _, reminderType := range notifyReminderTypes {
+		if strings.Contains(text, reminderType) {
+			t.Fatalf("preflight table printed the reminder type %q: %q", reminderType, text)
+		}
+	}
+}
+
+// TestRunNotifyPreflightJSONShape pins the versioned document: the schema tag, the
+// per-owner field set (snake_case, stable), the detail field appearing only when it
+// carries something, and the absence of any secret.
+func TestRunNotifyPreflightJSONShape(t *testing.T) {
+	report := preflightFixtureReport()
+	report.Outcomes[3].Reason = services.PreflightReasonDeliveryFailed
+	report.Outcomes[3].Detail = "non_2xx"
+	report.Outcomes[3].Actionable = true
+
+	runner := &stubPreflightRunner{report: report}
+	var out bytes.Buffer
+	if err := runNotifyPreflightCommand(runner, notifyOptions{preflight: true, preflightJSON: true}, time.Date(2026, 3, 12, 9, 0, 0, 0, time.UTC), time.UTC, &out); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Decoded into a generic map so the assertion is about the WIRE shape, not
+	// about the struct the renderer happens to use.
+	var document map[string]any
+	if err := json.Unmarshal(out.Bytes(), &document); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out.String())
+	}
+	if document["schema"] != "ovumcy-notify-preflight/v1" {
+		t.Fatalf("schema = %v", document["schema"])
+	}
+	if document["owners_scanned"] != float64(5) || document["matched"] != true {
+		t.Fatalf("aggregate fields = %v / %v", document["owners_scanned"], document["matched"])
+	}
+	if _, present := document["owner"]; present {
+		t.Fatalf("owner should be omitted without a filter: %v", document["owner"])
+	}
+	owners, ok := document["owners"].([]any)
+	if !ok || len(owners) != 5 {
+		t.Fatalf("owners should be a 5-row array, got %v", document["owners"])
+	}
+
+	wantKeys := []string{"owner_id", "host", "due", "reason", "actionable", "next_action"}
+	for _, raw := range owners {
+		row, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("owner row is not an object: %v", raw)
+		}
+		for _, key := range wantKeys {
+			if _, present := row[key]; !present {
+				t.Fatalf("owner row missing %q: %v", key, row)
+			}
+		}
+		if _, present := row["detail"]; present && row["detail"] == "" {
+			t.Fatalf("empty detail should be omitted: %v", row)
+		}
+	}
+
+	failed := owners[3].(map[string]any)
+	if failed["reason"] != services.PreflightReasonDeliveryFailed || failed["detail"] != "non_2xx" {
+		t.Fatalf("failed row = %v", failed)
+	}
+	if failed["actionable"] != true {
+		t.Fatalf("a delivery failure is actionable: %v", failed)
+	}
+	if next, _ := failed["next_action"].(string); next == "" || next == "unknown reason" {
+		t.Fatalf("failed row has no next action: %v", failed)
+	}
+
+	for _, banned := range []string{"http://", "https://", "token", "webhook_url", "SECRET"} {
+		if strings.Contains(out.String(), banned) {
+			t.Fatalf("preflight JSON leaked %q: %s", banned, out.String())
+		}
+	}
+}
+
+// TestRunNotifyPreflightOwnerFilter proves --owner narrows the PRINTED rows while
+// the walk still covers every owner, and that a filter matching nothing is an
+// error rather than an empty, healthy-looking table.
+func TestRunNotifyPreflightOwnerFilter(t *testing.T) {
+	runner := &stubPreflightRunner{report: preflightFixtureReport()}
+	var out bytes.Buffer
+	now := time.Date(2026, 3, 12, 9, 0, 0, 0, time.UTC)
+	if err := runNotifyPreflightCommand(runner, notifyOptions{preflight: true, preflightJSON: true, owner: "3"}, now, time.UTC, &out); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var document notifyPreflightDocument
+	if err := json.Unmarshal(out.Bytes(), &document); err != nil {
+		t.Fatalf("output is not JSON: %v", err)
+	}
+	if document.OwnersScanned != 5 || len(document.Owners) != 1 || document.Owners[0].OwnerID != 3 {
+		t.Fatalf("filter should list owner 3 out of 5 scanned, got %+v", document)
+	}
+	if !document.Matched || document.Owner != "3" {
+		t.Fatalf("matched/owner = %v/%q", document.Matched, document.Owner)
+	}
+
+	// The same filter over the human table: only owner 3's row is rendered.
+	var table bytes.Buffer
+	if err := runNotifyPreflightCommand(runner, notifyOptions{preflight: true, owner: "3"}, now, time.UTC, &table); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(table.String(), "listed: 1") || strings.Contains(table.String(), "10.0.0.5") {
+		t.Fatalf("filtered table rendered the wrong rows: %q", table.String())
+	}
+
+	// A filter that matches nothing is an error, on both renderings.
+	miss := &stubPreflightRunner{report: preflightFixtureReport()}
+	err := runNotifyPreflightCommand(miss, notifyOptions{preflight: true, owner: "99"}, now, time.UTC, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "no owner matched") {
+		t.Fatalf("an unmatched filter must be an error, got %v", err)
+	}
+}
+
+// TestNotifyPreflightNextActionCoversEveryReason keeps the operator-facing advice
+// table in step with the reason enum: a new reason key without a sentence would
+// render as "unknown reason" and fail here instead.
+func TestNotifyPreflightNextActionCoversEveryReason(t *testing.T) {
+	reasons := []string{
+		services.PreflightReasonOK,
+		services.PreflightReasonDeliveryDisabled,
+		services.PreflightReasonNoEndpoint,
+		services.PreflightReasonEndpointUnreadable,
+		services.PreflightReasonEndpointInvalid,
+		services.PreflightReasonPrivateAddressBlocked,
+		services.PreflightReasonLogsUnreadable,
+		services.PreflightReasonPredictionsSuppressed,
+		services.PreflightReasonNoReminderKind,
+		services.PreflightReasonAlreadySent,
+		services.PreflightReasonNotDue,
+		services.PreflightReasonDeliveryFailed,
+		services.PreflightReasonClaimLost,
+	}
+	for _, reason := range reasons {
+		action := notifyPreflightNextAction(reason)
+		if action == "" || action == "unknown reason" {
+			t.Fatalf("reason %q has no next action", reason)
+		}
+		// The sentence's own voice has to agree with the service's Actionable flag,
+		// which is what the operator reads in the same row.
+		actionable := services.PreflightReasonActionable(reason)
+		if strings.HasPrefix(action, "Act now:") != actionable {
+			t.Fatalf("reason %q: action %q disagrees with actionable=%v", reason, action, actionable)
+		}
+	}
+	if got := notifyPreflightNextAction("a-reason-that-does-not-exist"); got != "unknown reason" {
+		t.Fatalf("an unknown reason should say so, got %q", got)
+	}
+}
+
+// TestRunNotifyCommandEndToEndPreflight drives the real RunNotifyCommand wiring
+// with --preflight against a fresh migrated SQLite DB with no owners: the walk runs,
+// the aggregate is zero, and the command exits 0 with the schema tag on stdout.
+func TestRunNotifyCommandEndToEndPreflight(t *testing.T) {
+	config := db.Config{Driver: db.DriverSQLite, SQLitePath: filepath.Join(t.TempDir(), "cli-notify-preflight.db")}
+	if err := RunNotifyCommand(config, testNotifySecretKey, "en", time.UTC, false, []string{"--preflight"}); err != nil {
+		t.Fatalf("zero-owner preflight should succeed, got %v", err)
+	}
+}
+
+// TestRunNotifyPreflightCommandCoversFallbacks drives the three branches of the
+// command that the happy-path tests never reach: an absent output writer (the
+// command must fall back to stdout rather than panic), a service error (it must
+// be wrapped, not swallowed) and a row carrying a detail (the table must render
+// reason:detail, the same spelling the JSON code field uses).
+func TestRunNotifyPreflightCommandCoversFallbacks(t *testing.T) {
+	now := time.Date(2026, 3, 12, 9, 0, 0, 0, time.UTC)
+
+	t.Run("nil output falls back without panicking", func(t *testing.T) {
+		// An unmatched filter returns before anything is printed, so this covers
+		// the nil-writer fallback without writing to the real stdout.
+		runner := &stubPreflightRunner{report: preflightFixtureReport()}
+		err := runNotifyPreflightCommand(runner, notifyOptions{preflight: true, owner: "99"}, now, time.UTC, nil)
+		if err == nil || !strings.Contains(err.Error(), "no owner matched") {
+			t.Fatalf("expected the unmatched-filter error, got %v", err)
+		}
+	})
+
+	t.Run("service error is wrapped", func(t *testing.T) {
+		runner := &stubPreflightRunner{err: errors.New("db down")}
+		err := runNotifyPreflightCommand(runner, notifyOptions{preflight: true}, now, time.UTC, &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "notify preflight failed") {
+			t.Fatalf("expected a wrapped preflight error, got %v", err)
+		}
+	})
+
+	t.Run("a detail renders as reason:detail", func(t *testing.T) {
+		report := services.NotifyPreflightReport{
+			Pass: services.NotifyReport{OwnersScanned: 1, DryRun: true},
+			Outcomes: []services.PreflightOutcome{
+				{OwnerID: 1, Host: "ntfy.example", Due: 0, Reason: services.PreflightReasonDeliveryFailed, Detail: "non_2xx", Actionable: true},
+			},
+		}
+		var out bytes.Buffer
+		if err := runNotifyPreflightCommand(&stubPreflightRunner{report: report}, notifyOptions{preflight: true}, now, time.UTC, &out); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(out.String(), "delivery_failed:non_2xx") {
+			t.Fatalf("table did not render the detail suffix: %q", out.String())
+		}
+	})
 }

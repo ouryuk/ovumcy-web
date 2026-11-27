@@ -101,7 +101,7 @@ func BuildNotifyService(repositories *db.Repositories, secretKey []byte, i18nMan
 		webhookSettings,
 		deliverer,
 		i18nDisclaimerProvider{manager: i18nManager},
-	)
+	).WithPrivateAddressGate(blockPrivateAddresses)
 }
 
 // BuildDependencies wires the repositories and configuration into the domain

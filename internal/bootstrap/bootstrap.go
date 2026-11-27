@@ -206,6 +206,9 @@ func BuildDependencies(repositories *db.Repositories, secretKey []byte, i18nMana
 		SettingsViewService:    services.NewSettingsViewService(settingsService, exportService, symptomService, egressLedgerService),
 		WebhookSettingsService: webhookSettingsService,
 		WebhookNotifyService:   webhookNotifyService,
+		// The history is a dependency of its own: the Settings page and the
+		// deliveries API read it, and neither goes through a notify pass.
+		WebhookDeliveryHistory: services.NewWebhookDeliveryHistory(repositories.WebhookDeliveries),
 		OnboardingService:      services.NewOnboardingService(repositories.Users),
 		SetupService:           services.NewSetupService(repositories.Users),
 		TOTPService:            totpService,

@@ -408,6 +408,14 @@ func (client *webhookDeliveryClient) DeliverWithOutcome(ctx context.Context, dec
 	return WebhookDeliveryOutcome{HTTPStatus: response.StatusCode, LatencyMS: elapsedMs(startedAt), Host: parsed.Hostname()}, nil
 }
 
+// isTLSHandshakeOp reports whether a net.OpError's operation names a TLS
+// handshake, which crypto/tls reports as "remote error" (an alert from the
+// peer) or "local error" (a failure on this side, before any application
+// data). Both mean the secure connection never came up.
+func isTLSHandshakeOp(op string) bool {
+	return op == "remote error" || op == "local error"
+}
+
 // elapsedMs returns the milliseconds elapsed since startedAt, never negative
 // and never negative-looking: the clock this reads can step backwards, and a
 // negative latency would render as a nonsense figure on the owner's page.
@@ -449,13 +457,18 @@ func classifyWebhookTransportError(err error) string {
 		return models.WebhookDeliveryErrorTLS
 	}
 
-	// A TLS handshake that fails for a reason other than certificate
-	// verification (a protocol mismatch, an alert) arrives as a plain error
-	// from the handshake, not as a typed one. The stdlib marks those with
-	// "tls:" in the message; that is the only place the class is available,
-	// and it is read from the TYPE, never from the URL the message carries.
-	var handshakeError *tls.ConnError
-	if errors.As(err, &handshakeError) {
+	// A handshake that fails before certificate verification (a protocol
+	// mismatch, an alert, a record header the peer never completed) is a
+	// *tls.RecordHeaderError or a *net.OpError whose Op is "remote error"/
+	// "local error". Both are handshake failures and both mean the TLS
+	// connection did not come up, which is what the tls class reports.
+	var recordHeaderError *tls.RecordHeaderError
+	if errors.As(err, &recordHeaderError) {
+		return models.WebhookDeliveryErrorTLS
+	}
+
+	var opError *net.OpError
+	if errors.As(err, &opError) && isTLSHandshakeOp(opError.Op) {
 		return models.WebhookDeliveryErrorTLS
 	}
 

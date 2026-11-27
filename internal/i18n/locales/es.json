@@ -677,7 +677,6 @@
   "settings.webhook.test": "Enviar notificación de prueba",
   "settings.webhook.test_hint": "Envía un mensaje de prueba al endpoint guardado. No es un recordatorio de periodo ni de ovulación.",
   "settings.webhook.deliveries.title": "Entregas recientes",
-  "settings.webhook.deliveries.empty": "Todavía no se ha intentado ninguna entrega.",
   "settings.webhook.deliveries.failure_notice": "Los recordatorios no llegan a tu endpoint desde",
   "settings.webhook.deliveries.kind.period": "Recordatorio de periodo",
   "settings.webhook.deliveries.kind.ovulation": "Recordatorio de ovulación",

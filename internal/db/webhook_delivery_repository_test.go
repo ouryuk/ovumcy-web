@@ -24,7 +24,7 @@ func TestWebhookDeliveryRepositoryKeepsTheNewestTwenty(t *testing.T) {
 
 	const inserted = WebhookDeliveryRingSize + 5
 	base := time.Date(2026, time.November, 1, 8, 0, 0, 0, time.UTC)
-	for index := 0; index < inserted; index++ {
+	for index := range inserted {
 		row := models.WebhookDelivery{
 			UserID:       userID,
 			OccurredAt:   base.Add(time.Duration(index) * time.Hour),
@@ -82,7 +82,7 @@ func TestWebhookDeliveryRepositoryRingIsPerOwner(t *testing.T) {
 	}
 	requireNoErr(t, repo.RecordWebhookDelivery(ctx, quiet), "record quiet owner row")
 
-	for index := 0; index < WebhookDeliveryRingSize*2; index++ {
+	for index := range WebhookDeliveryRingSize * 2 {
 		row := models.WebhookDelivery{
 			UserID:       busyUserID,
 			OccurredAt:   base.Add(time.Duration(index+1) * time.Minute),

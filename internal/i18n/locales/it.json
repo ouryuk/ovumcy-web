@@ -677,7 +677,6 @@
   "settings.webhook.test": "Invia notifica di prova",
   "settings.webhook.test_hint": "Invia un messaggio di prova all'endpoint salvato. Non è un promemoria del ciclo o dell'ovulazione.",
   "settings.webhook.deliveries.title": "Consegne recenti",
-  "settings.webhook.deliveries.empty": "Non è ancora stata tentata alcuna consegna.",
   "settings.webhook.deliveries.failure_notice": "I promemoria non raggiungono il tuo endpoint dal",
   "settings.webhook.deliveries.kind.period": "Promemoria del ciclo",
   "settings.webhook.deliveries.kind.ovulation": "Promemoria dell'ovulazione",

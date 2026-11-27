@@ -677,7 +677,6 @@
   "settings.webhook.test": "Send test notification",
   "settings.webhook.test_hint": "Sends one test message to the saved endpoint. It is not a period or ovulation reminder.",
   "settings.webhook.deliveries.title": "Recent deliveries",
-  "settings.webhook.deliveries.empty": "No delivery has been attempted yet.",
   "settings.webhook.deliveries.failure_notice": "Reminders are not reaching your endpoint since",
   "settings.webhook.deliveries.kind.period": "Period reminder",
   "settings.webhook.deliveries.kind.ovulation": "Ovulation reminder",

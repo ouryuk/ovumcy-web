@@ -693,7 +693,6 @@
   "settings.webhook.test": "Отправить тестовое уведомление",
   "settings.webhook.test_hint": "Отправляет одно тестовое сообщение на сохранённый эндпоинт. Это не напоминание о месячных или овуляции.",
   "settings.webhook.deliveries.title": "Последние доставки",
-  "settings.webhook.deliveries.empty": "Доставка ещё не выполнялась.",
   "settings.webhook.deliveries.failure_notice": "Напоминания не доходят до вашего эндпоинта с",
   "settings.webhook.deliveries.kind.period": "Напоминание о месячных",
   "settings.webhook.deliveries.kind.ovulation": "Напоминание об овуляции",

@@ -175,12 +175,11 @@
            Nothing here names the URL: the row carries the destination's host
            alone, and the failure carries a bounded CLASS. The list is drawn
            from the page's own render, so it needs no fetch of its own. */}}
-      {{if .WebhookDeliveries}}
+      {{if .WebhookDeliveries.HasRows}}
       <div class="space-y-2" data-webhook-deliveries>
         {{if .WebhookDeliveries.ShowFailureNotice}}
         <p class="status-error" data-webhook-deliveries-failure-notice>{{t .Messages .WebhookDeliveries.FailureNoticeKey}} <time datetime="{{(index .WebhookDeliveries.Rows 0).OccurredISO}}">{{.WebhookDeliveries.FailureNoticeText}}</time></p>
         {{end}}
-        {{if .WebhookDeliveries.HasRows}}
         <h4 class="field-label">{{t .Messages "settings.webhook.deliveries.title"}}</h4>
         <ul class="space-y-2" data-webhook-deliveries-list>
           {{range .WebhookDeliveries.Rows}}
@@ -198,9 +197,6 @@
           </li>
           {{end}}
         </ul>
-        {{else}}
-        <p class="journal-muted text-sm" data-webhook-deliveries-empty>{{t .Messages "settings.webhook.deliveries.empty"}}</p>
-        {{end}}
       </div>
       {{end}}
 

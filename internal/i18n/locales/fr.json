@@ -413,7 +413,6 @@
   "settings.webhook.test": "Envoyer une notification de test",
   "settings.webhook.test_hint": "Envoie un message de test au point de terminaison enregistré. Ce n'est pas un rappel de règles ni d'ovulation.",
   "settings.webhook.deliveries.title": "Envois récents",
-  "settings.webhook.deliveries.empty": "Aucun envoi n'a encore été tenté.",
   "settings.webhook.deliveries.failure_notice": "Les rappels n'atteignent plus votre point de terminaison depuis le",
   "settings.webhook.deliveries.kind.period": "Rappel de règles",
   "settings.webhook.deliveries.kind.ovulation": "Rappel d'ovulation",

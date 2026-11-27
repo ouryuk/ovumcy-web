@@ -677,7 +677,6 @@
   "settings.webhook.test": "Testbenachrichtigung senden",
   "settings.webhook.test_hint": "Sendet eine Testnachricht an den gespeicherten Endpunkt. Sie ist keine Perioden- oder Eisprung-Erinnerung.",
   "settings.webhook.deliveries.title": "Letzte Zustellungen",
-  "settings.webhook.deliveries.empty": "Es wurde noch keine Zustellung versucht.",
   "settings.webhook.deliveries.failure_notice": "Erinnerungen erreichen Ihren Endpunkt nicht mehr seit",
   "settings.webhook.deliveries.kind.period": "Perioden-Erinnerung",
   "settings.webhook.deliveries.kind.ovulation": "Eisprung-Erinnerung",

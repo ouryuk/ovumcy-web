@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -128,7 +129,7 @@ func TestResolveOperatorLocationFallsBackToUTC(t *testing.T) {
 // wrong for every US-evening run.
 func TestSummaryWindowEndsOnTheOwnersCalendarDay(t *testing.T) {
 	databasePath := createCLIUsersDatabase(t)
-	user := seedSummaryFixture(t, databasePath)
+	user, _, _ := seedSummaryFixture(t, databasePath)
 	setCLIUserTimezone(t, databasePath, user.ID, "America/Chicago")
 
 	// runSummaryForOwner re-pins the clock to 2026-03-07 12:00 UTC, so the
@@ -236,23 +237,22 @@ func TestTrendsUsesTheOwnersTimezoneUnlessOverridden(t *testing.T) {
 // OpenDatabase(), so running one against a live instance opened the file
 // read-write and ran the embedded migrations.
 //
-// The measurement is the file's own content rather than a schema probe: the
+// The measurement is a fingerprint of the database plus its WAL sidecars
+// (existence, size, modification time) rather than a schema probe: the
 // migration set is recorded in schema_migrations, so a table a migration created
-// is NOT re-created when it is dropped here — but every migration pass also
-// touches the WAL and the schema bookkeeping, and ANY write to the file changes
-// its bytes. A read-only open leaves them identical.
+// is NOT re-created when it is dropped here, while ANY write — a migration, a
+// checkpoint, a journal rollover — moves the fingerprint. The read-only open
+// must leave it identical, and a real write through the read-write pool is the
+// control that proves the fingerprint notices one.
 func TestReadOnlyCommandsDoNotTouchTheDatabaseFile(t *testing.T) {
 	databasePath := createCLIUsersDatabase(t)
 	seedPredictFixture(t, databasePath)
 	pinSummaryClock(t)
 	pinPredictNow(t, time.Date(2026, time.March, 27, 12, 0, 0, 0, time.UTC))
 
-	before, err := os.ReadFile(databasePath)
-	if err != nil {
-		t.Fatalf("read database before: %v", err)
-	}
-
 	config := db.Config{Driver: db.DriverSQLite, SQLitePath: databasePath}
+	before := cliDatabaseFingerprint(t, databasePath)
+
 	for _, command := range []struct {
 		name string
 		run  func() error
@@ -277,37 +277,47 @@ func TestReadOnlyCommandsDoNotTouchTheDatabaseFile(t *testing.T) {
 		if err := command.run(); err != nil {
 			t.Fatalf("%s failed: %v", command.name, err)
 		}
-		after, readErr := os.ReadFile(databasePath)
-		if readErr != nil {
-			t.Fatalf("read database after %s: %v", command.name, readErr)
-		}
-		if !bytes.Equal(before, after) {
-			t.Fatalf("%s wrote to the database file it was only reading (%d -> %d bytes)", command.name, len(before), len(after))
+		if after := cliDatabaseFingerprint(t, databasePath); after != before {
+			t.Fatalf("%s changed the database it was only reading:\n  before %s\n  after  %s", command.name, before, after)
 		}
 	}
 
-	// The probe is only meaningful if the read-write path really does change
-	// the file — otherwise the comparison above would pass for any two opens.
+	// The control: a real write through the read-write pool MUST move the
+	// fingerprint, or the comparison above would pass for any two opens.
 	database, err := db.OpenDatabase(config)
 	if err != nil {
 		t.Fatalf("open read-write: %v", err)
 	}
+	// A checkpoint alone can coalesce, so the control performs an UPDATE: the
+	// point is to prove the fingerprint measures writes, not to exercise gorm.
+	if err := database.Exec("UPDATE users SET timezone = ?", "America/Chicago").Error; err != nil {
+		t.Fatalf("control write: %v", err)
+	}
 	if sqlDB, handleErr := database.DB(); handleErr == nil {
 		_ = sqlDB.Close()
 	}
-	afterReadWrite, err := os.ReadFile(databasePath)
-	if err != nil {
-		t.Fatalf("read database after the read-write open: %v", err)
+	if afterControl := cliDatabaseFingerprint(t, databasePath); afterControl == before {
+		t.Fatalf("expected a read-write UPDATE to move the fingerprint; the comparison is not measuring writes:\n  before %s\n  after  %s", before, afterControl)
 	}
-	if bytes.Equal(before, afterReadWrite) {
-		t.Fatalf("expected a read-write OpenDatabase to change the file; the comparison is not measuring writes")
-	}
+}
 
-	// And the read-only mode must not create the `-shm`/`-wal` sidecars a
-	// read-write connection leaves in the server's data directory.
-	if _, err := os.Stat(databasePath + "-shm"); err == nil {
-		t.Fatalf("expected the read-only commands to leave no -shm file behind")
+// cliDatabaseFingerprint summarises the database file and its WAL sidecars:
+// which of them exist, and each one's size and modification time. Any write —
+// by a command, a migration, or a checkpoint — changes at least one of those,
+// and a read-only connection changes none.
+func cliDatabaseFingerprint(t *testing.T, databasePath string) string {
+	t.Helper()
+
+	var parts []string
+	for _, path := range []string{databasePath, databasePath + "-wal", databasePath + "-shm"} {
+		info, err := os.Stat(path)
+		if err != nil {
+			parts = append(parts, filepath.Base(path)+"=absent")
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%d@%d", filepath.Base(path), info.Size(), info.ModTime().UnixNano()))
 	}
+	return strings.Join(parts, " ")
 }
 
 // TestExportOutFileIsAlwaysOwnerOnly is defect #4's file half: `--out` onto an

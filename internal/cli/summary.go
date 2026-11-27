@@ -153,11 +153,12 @@ func runSummaryCommand(databaseConfig db.Config, args []string, output io.Writer
 
 	// The window ends on the owner's OWN calendar day, resolved from the
 	// account's stored zone (falling back to UTC) unless --tz overrides it.
-	timezoneName := opts.tz
-	if !opts.tzSet {
-		_, timezoneName = resolveOperatorLocation(user.Timezone)
+	// ownerClockZone reads users.timezone from the full row: the summary this
+	// command holds carries no timezone field.
+	location, _, err := ownerClockZone(context.Background(), repositories.Users, user.ID, opts.tz, opts.tzSet)
+	if err != nil {
+		return fmt.Errorf("summary: %w", err)
 	}
-	location, _ := resolveOperatorLocation(timezoneName)
 
 	to := summaryNow()
 	year, month, day := to.In(location).Date()

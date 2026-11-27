@@ -52,6 +52,12 @@ func TestOpenDatabaseReadOnlyRefusesWritesAndLeavesTheFileAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read database before: %v", err)
 	}
+	// The sidecars the closing writer left behind, if any. SQLite may remove
+	// `-wal`/`-shm` on a clean close or leave them for the next connection, and
+	// which one it does is not this test's subject — what the read-only open
+	// must not do is ADD one, which is why the assertion below compares the set
+	// before with the set after instead of requiring both to be absent.
+	beforeSidecars := sqliteSidecars(databasePath)
 
 	readOnly, err := OpenDatabaseReadOnly(Config{Driver: DriverSQLite, SQLitePath: databasePath})
 	if err != nil {
@@ -91,11 +97,22 @@ func TestOpenDatabaseReadOnlyRefusesWritesAndLeavesTheFileAlone(t *testing.T) {
 	if err := readOnlySQL.Close(); err != nil {
 		t.Fatalf("close read-only handle: %v", err)
 	}
-	for _, sidecar := range []string{databasePath + "-wal", databasePath + "-shm"} {
-		if _, err := os.Stat(sidecar); err == nil {
+	for _, sidecar := range sqliteSidecars(databasePath) {
+		if !beforeSidecars[sidecar] {
 			t.Fatalf("read-only open created %s", filepath.Base(sidecar))
 		}
 	}
+}
+
+// sqliteSidecars reports which of the WAL sidecar files exist beside dbPath.
+func sqliteSidecars(dbPath string) map[string]bool {
+	present := make(map[string]bool, 2)
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(dbPath + suffix); err == nil {
+			present[dbPath+suffix] = true
+		}
+	}
+	return present
 }
 
 // TestOpenDatabaseReadOnlyDoesNotCreateAMissingDatabase: a reporting subcommand

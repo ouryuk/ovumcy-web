@@ -179,14 +179,20 @@ func runPredictCommand(databaseConfig db.Config, args []string, output io.Writer
 	}
 
 	// The owner's persisted zone is the default; --tz overrides it for the
-	// invocation. Both resolve through resolveOperatorLocation, so an absent or
-	// unusable stored zone degrades to UTC instead of to the server's own zone.
-	timezoneName := opts.tz
-	if !opts.tzSet {
-		_, timezoneName = resolveOperatorLocation(user.Timezone)
+	// invocation. ownerClockZone is the one place that reads users.timezone, so
+	// `predict` cannot resolve a different day than `summary`, `trends` or
+	// `export` for the same account at the same instant.
+	location, timezoneName, err := ownerClockZone(context.Background(), repositories.Users, user.ID, opts.tz, opts.tzSet)
+	if err != nil {
+		return fmt.Errorf("predict: %w", err)
 	}
-	location, timezoneName := resolveOperatorLocation(timezoneName)
-	now := predictNow()
+	// The clock is read in the OWNER's zone, exactly as the dashboard does
+	// (handlers pass time.Now().In(location)). The derivation below takes the
+	// instant's own calendar date, so handing it a UTC instant would anchor the
+	// projection on the SERVER's day — an owner in America/Chicago would be
+	// projected from yesterday all evening, and `as_of` would disagree with the
+	// cycle day it printed beside it.
+	now := predictNow().In(location)
 
 	// Package-level, not a method: the derivation consults no repositories,
 	// so the CLI cannot drift from what the dashboard shows for the same

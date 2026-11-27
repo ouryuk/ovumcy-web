@@ -142,14 +142,12 @@ func runTrendsCommand(databaseConfig db.Config, args []string, output io.Writer)
 
 	// The owner's persisted zone is the default — the phases are calendar days,
 	// so computing them in UTC splits an owner's evening log into the next day —
-	// and --tz overrides it. Both resolve through resolveOperatorLocation, which
-	// degrades an absent or unusable stored value to UTC, never to the server's
-	// own zone; BuildCyclePhaseTrends applies the same resolver to the name.
-	timezoneName := opts.tz
-	if !opts.tzSet {
-		_, timezoneName = resolveOperatorLocation(user.Timezone)
+	// and --tz overrides it. ownerClockZone reads users.timezone from the full
+	// row, which the summary this command holds does not carry.
+	_, timezoneName, err := ownerClockZone(context.Background(), repositories.Users, user.ID, opts.tz, opts.tzSet)
+	if err != nil {
+		return fmt.Errorf("trends: %w", err)
 	}
-	_, timezoneName = resolveOperatorLocation(timezoneName)
 
 	trends := services.BuildCyclePhaseTrends(timezoneName, logs, symptoms)
 	document := buildTrendsDocument(user, timezoneName, trends)

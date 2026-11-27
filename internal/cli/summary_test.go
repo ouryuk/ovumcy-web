@@ -337,14 +337,14 @@ func TestRunSummaryCommandArgumentErrorsExtended(t *testing.T) {
 	// is the mistake, so it gets its own message (and never falls through to
 	// an email, see TestReadOnlyCommandsRefuseAnExplicitIDZero).
 	var zeroIDOutput bytes.Buffer
-	err := runSummaryCommand(config, []string{"--id", "0"}, &zeroIDOutput)
-	if err == nil || !strings.Contains(err.Error(), "positive account id") {
-		t.Fatalf("expected the non-positive-id message for --id 0, got %v", err)
+	zeroIDErr := runSummaryCommand(config, []string{"--id", "0"}, &zeroIDOutput)
+	if zeroIDErr == nil || !strings.Contains(zeroIDErr.Error(), "positive account id") {
+		t.Fatalf("expected the non-positive-id message for --id 0, got %v", zeroIDErr)
 	}
 
 	// A display-name address is refused up front, before any database work.
 	var output bytes.Buffer
-	err := runSummaryCommand(config, []string{"Owner <a@example.com>"}, &output)
+	err = runSummaryCommand(config, []string{"Owner <a@example.com>"}, &output)
 	if err == nil || !strings.Contains(err.Error(), "invalid email address") {
 		t.Fatalf("expected invalid-email error, got %v", err)
 	}

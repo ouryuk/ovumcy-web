@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ovumcy/ovumcy-web/internal/db"
+	"github.com/ovumcy/ovumcy-web/internal/services"
 	"gorm.io/gorm"
 )
 
@@ -71,6 +73,49 @@ func openCLIDatabase(databaseConfig db.Config, readOnly bool) (*gorm.DB, error) 
 		return db.OpenDatabaseReadOnly(databaseConfig)
 	}
 	return db.OpenDatabase(databaseConfig)
+}
+
+// ownerClockZone resolves the calendar day a command measures "today" in.
+//
+// It takes the override the operator typed (--tz) together with the flag that
+// says whether they typed it at all, plus the account's id, and it reads the
+// stored zone from the FULL user row itself.
+//
+// Reading the row here rather than taking a `string` from the caller is the
+// point: the four reporting commands hold different values after resolving the
+// owner. `predict` loads the full row anyway, while `export`, `summary` and
+// `trends` hold a models.OperatorUserSummary — which carries no Timezone field
+// at all. Deriving the zone from whatever the caller happened to have in hand is
+// exactly how `summary` and `trends` came to reference a field that does not
+// exist; asking the repository once, here, keeps every command on the same
+// column (users.timezone) with the same fallback.
+//
+// A lookup failure is NOT swallowed into the UTC fallback: "this account has no
+// usable zone" and "the users table could not be read" are different answers,
+// and silently reporting the second as the first would hand an operator a
+// window that looks authoritative and is off by a day. The caller wraps it.
+func ownerClockZone(
+	ctx context.Context,
+	users *db.UserRepository,
+	userID uint,
+	override string,
+	overrideSet bool,
+) (location *time.Location, name string, err error) {
+	if overrideSet {
+		location, name = resolveOperatorLocation(override)
+		return location, name, nil
+	}
+
+	user, found, err := users.FindByIDOptional(ctx, userID)
+	if err != nil {
+		return nil, "", fmt.Errorf("look up account timezone: %w", err)
+	}
+	if !found {
+		return nil, "", fmt.Errorf("look up account timezone: %w", services.ErrOperatorUserNotFound)
+	}
+
+	location, name = resolveOperatorLocation(user.Timezone)
+	return location, name, nil
 }
 
 // resolveOperatorLocation resolves the clock a command derives "today" from.

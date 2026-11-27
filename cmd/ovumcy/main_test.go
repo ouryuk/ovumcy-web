@@ -2275,6 +2275,95 @@ func TestTryRunCLICommandWithHandlersRepairRequiresHandler(t *testing.T) {
 	}
 }
 
+func TestTryRunCLICommandWithHandlersDispatchesPreflight(t *testing.T) {
+	t.Setenv("DB_DRIVER", "sqlite")
+	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "cli-preflight.db"))
+	t.Setenv("DATABASE_URL", "")
+	// No SECRET_KEY, deliberately: `preflight` is one of the read-only, no-secret
+	// subcommands, and a dispatch that demanded the key would make it unusable on
+	// exactly the instance where an operator is checking whether the webhook is
+	// armed.
+	t.Setenv("SECRET_KEY", "")
+	t.Setenv("SECRET_KEY_FILE", "")
+
+	var receivedArgs []string
+	handled, err := tryRunCLICommandWithHandlers([]string{"preflight", "owner@example.com", "--json"}, cliCommandHandlers{
+		runPreflight: func(databaseConfig db.Config, args []string) error {
+			if databaseConfig.Driver != db.DriverSQLite {
+				t.Fatalf("expected sqlite driver, got %q", databaseConfig.Driver)
+			}
+			receivedArgs = args
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !handled {
+		t.Fatal("expected preflight command to be handled")
+	}
+	if len(receivedArgs) != 2 || receivedArgs[0] != "owner@example.com" || receivedArgs[1] != "--json" {
+		t.Fatalf("expected the email and --json forwarded as args, got %v", receivedArgs)
+	}
+}
+
+func TestTryRunCLICommandWithHandlersPreflightPropagatesTheNotReadyVerdict(t *testing.T) {
+	t.Setenv("DB_DRIVER", "sqlite")
+	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "cli-preflight.db"))
+	t.Setenv("DATABASE_URL", "")
+
+	// The handler reports "blocking findings present" AS AN ERROR so the process
+	// exits 1. The dispatch must not swallow or rewrap it into a nil, or the
+	// documented exit-code contract would be lost at this boundary.
+	verdict := errors.New("preflight: 2 blocking findings")
+	handled, err := tryRunCLICommandWithHandlers([]string{"preflight", "owner@example.com"}, cliCommandHandlers{
+		runPreflight: func(db.Config, []string) error { return verdict },
+	})
+	if !handled {
+		t.Fatal("expected preflight command to be handled")
+	}
+	if !errors.Is(err, verdict) {
+		t.Fatalf("expected the verdict error propagated unchanged, got %v", err)
+	}
+}
+
+func TestTryRunCLICommandWithHandlersRejectsPreflightWithNoTarget(t *testing.T) {
+	handled, err := tryRunCLICommandWithHandlers([]string{"preflight"}, cliCommandHandlers{})
+	if !handled {
+		t.Fatal("expected preflight command to be handled")
+	}
+	if err == nil || !strings.Contains(err.Error(), "usage: ovumcy preflight <email>") {
+		t.Fatalf("expected the preflight usage error, got %v", err)
+	}
+}
+
+func TestTryRunCLICommandWithHandlersPreflightRequiresHandler(t *testing.T) {
+	handled, err := tryRunCLICommandWithHandlers([]string{"preflight", "owner@example.com"}, cliCommandHandlers{})
+	if !handled {
+		t.Fatal("expected preflight command to be handled")
+	}
+	if err == nil || !strings.Contains(err.Error(), "preflight handler is required") {
+		t.Fatalf("expected the preflight-handler-required error, got %v", err)
+	}
+}
+
+func TestTryRunCLICommandWithHandlersPreflightReportsInvalidDatabaseConfig(t *testing.T) {
+	t.Setenv("DB_DRIVER", "mysql")
+
+	handled, err := tryRunCLICommandWithHandlers([]string{"preflight", "owner@example.com"}, cliCommandHandlers{
+		runPreflight: func(db.Config, []string) error {
+			t.Fatal("did not expect the preflight handler to be called with an invalid DB config")
+			return nil
+		},
+	})
+	if !handled {
+		t.Fatal("expected preflight command to be handled")
+	}
+	if err == nil || !strings.Contains(err.Error(), "invalid database config") {
+		t.Fatalf("expected an invalid-database-config error, got %v", err)
+	}
+}
+
 func TestTryRunCLICommandWithHandlersRepairReportsInvalidDatabaseConfig(t *testing.T) {
 	t.Setenv("DB_DRIVER", "mysql")
 

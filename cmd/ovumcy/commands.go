@@ -25,6 +25,7 @@ func tryRunCLICommand() (bool, error) {
 		runSummary:          cli.RunSummaryCommand,
 		runTrends:           cli.RunTrendsCommand,
 		runPredict:          cli.RunPredictCommand,
+		runPreflight:        cli.RunPreflightCommand,
 	})
 }
 
@@ -41,6 +42,7 @@ type cliCommandHandlers struct {
 	runSummary          func(databaseConfig db.Config, args []string) error
 	runTrends           func(databaseConfig db.Config, args []string) error
 	runPredict          func(databaseConfig db.Config, args []string) error
+	runPreflight        func(databaseConfig db.Config, args []string) error
 }
 
 func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (bool, error) {
@@ -73,6 +75,8 @@ func tryRunCLICommandWithHandlers(args []string, handlers cliCommandHandlers) (b
 		return handleTrendsCommand(args, handlers)
 	case "predict":
 		return handlePredictCommand(args, handlers)
+	case "preflight":
+		return handlePreflightCommand(args, handlers)
 	default:
 		return false, nil
 	}
@@ -270,6 +274,29 @@ func handlePredictCommand(args []string, handlers cliCommandHandlers) (bool, err
 		return true, fmt.Errorf("invalid database config: %w", err)
 	}
 	return true, handlers.runPredict(databaseConfig, args[1:])
+}
+
+// handlePreflightCommand dispatches `ovumcy preflight`: a read-only, no-secret
+// readiness report answering whether one owner will actually receive their next
+// webhook reminder. It never sends a webhook and never touches a watermark, so
+// like `predict` it needs only the database config — no SECRET_KEY is resolved.
+//
+// It deliberately returns the handler's error untouched: the handler's
+// "blocking findings present" verdict IS an error, and this wrapper must not
+// swallow it or the exit-code contract (0 = ready, 1 = not ready) would be
+// lost at the dispatch boundary.
+func handlePreflightCommand(args []string, handlers cliCommandHandlers) (bool, error) {
+	if len(args) < 2 {
+		return true, fmt.Errorf("usage: ovumcy preflight <email> [--id <id>] [--tz <IANA name>] [--json]")
+	}
+	if handlers.runPreflight == nil {
+		return true, fmt.Errorf("preflight handler is required")
+	}
+	databaseConfig, err := resolveDatabaseConfig()
+	if err != nil {
+		return true, fmt.Errorf("invalid database config: %w", err)
+	}
+	return true, handlers.runPreflight(databaseConfig, args[1:])
 }
 
 func handleWebhookCommand(args []string, handlers cliCommandHandlers) (bool, error) {

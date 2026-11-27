@@ -254,6 +254,14 @@ usage: ovumcy webhook <show|set> <email> [--enabled=<bool>] [--notify-period=<bo
 - `ovumcy webhook show <email>` prints the owner's current settings: whether
   delivery is enabled, the endpoint **host only** (never the full URL or any
   embedded token), and the notify-period/notify-ovulation toggles.
+- `ovumcy preflight <email>` answers the adjacent question — *“will this owner
+  actually get their next reminder?”* — without sending anything or touching the
+  delivery watermark. It composes the same projection, settings and
+  due-reminder rule the notify pass uses into one readiness report (next
+  reminder kind and date, webhook state, last accepted delivery, and an ordered
+  list of blocking findings each with a one-line fix), and exits 1 while any
+  finding stands, 0 when the owner is ready. It holds no `SECRET_KEY`, so it
+  states only *whether* an endpoint is stored; use `webhook show` for its host.
 - `ovumcy webhook set <email> --enabled=true --notify-period=true --url-stdin`
   configures settings. Boolean flags take an explicit `=true`/`=false` value so
   an unspecified flag leaves that setting untouched.

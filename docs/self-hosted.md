@@ -288,7 +288,7 @@ Use the scripted form when you need to recover several accounts at once — for 
 
 Every subcommand above applies any pending migrations first, exactly as the server does, so none of them runs on a database a migration is refusing. The one that does not is `ovumcy repair`, which exists for that case and opens the database without applying anything. It is also the subcommand you are most likely to reach with `docker compose run --rm` rather than `docker exec`, because the container it would attach to is usually down when you need it. See [Duplicate rows that refuse a migration](#duplicate-rows-that-refuse-a-migration).
 
-**Read-only reporting commands.** The same binary carries a family of read-only operator commands that report on one owner's records: `export`, `summary`, `trends` and `predict`. All four write nothing and need no `SECRET_KEY` (only the database config, which the container already has), so they run as a plain `docker exec ovumcy /app/ovumcy <command> …` with nothing else to pass in. Like the other subcommands, they apply any pending migrations first, exactly as the server does. The owner is resolved by email or by `--id <id>`; an address matching several rows is refused, naming the ids — retry with `--id` (find it with `docker exec ovumcy /app/ovumcy users list`).
+**Read-only reporting commands.** The same binary carries a family of read-only operator commands that report on one owner's records: `export`, `summary`, `trends`, `predict` and `preflight`. All five write nothing and need no `SECRET_KEY` (only the database config, which the container already has), so they run as a plain `docker exec ovumcy /app/ovumcy <command> …` with nothing else to pass in. Like the other subcommands, they apply any pending migrations first, exactly as the server does. The owner is resolved by email or by `--id <id>`; an address matching several rows is refused, naming the ids — retry with `--id` (find it with `docker exec ovumcy /app/ovumcy users list`).
 
 ```bash
 # Usage lines, exactly as a usage error prints them:
@@ -296,6 +296,7 @@ Every subcommand above applies any pending migrations first, exactly as the serv
 #   ovumcy summary <email> [--id <id>] [--days 7|30|90] [--json]
 #   ovumcy trends <email> [--id <id>] [--tz <IANA name>] [--json]
 #   ovumcy predict <email> [--id <id>] [--tz <IANA name>] [--json]
+#   ovumcy preflight <email> [--id <id>] [--tz <IANA name>] [--json]
 
 # Full record of one owner as JSON (ovumcy-export/v1), captured on the host.
 docker exec ovumcy /app/ovumcy export owner@example.com > owner.json

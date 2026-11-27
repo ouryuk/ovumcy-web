@@ -89,6 +89,12 @@ func registerV1APIRoutes(app *fiber.App, handler *Handler) {
 	// save; it writes no settings and no watermark.
 	usersCurrent.Post("/webhook/test", handler.OwnerOnly, handler.SendTestWebhook)
 	usersCurrent.Delete("/webhook", handler.OwnerOnly, handler.RemoveWebhookDestination)
+	// The owner-visible delivery history: the newest attempts at sending a
+	// reminder to the stored endpoint. A GET because it reads only the
+	// authenticated owner's rows and reaches nothing outside this instance; the
+	// owner id comes from the session, so no request shape can ask for another
+	// owner's history.
+	usersCurrent.Get("/webhook/deliveries", handler.OwnerOnly, handler.GetWebhookDeliveries)
 	usersCurrent.Post("/calendar-feed", handler.OwnerOnly, handler.GenerateCalendarFeed)
 	usersCurrent.Post("/calendar-feed/rotate", handler.OwnerOnly, handler.RotateCalendarFeed)
 	usersCurrent.Delete("/calendar-feed", handler.OwnerOnly, handler.RevokeCalendarFeed)

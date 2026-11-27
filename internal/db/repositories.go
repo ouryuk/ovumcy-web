@@ -11,6 +11,9 @@ type Repositories struct {
 	RegisterPickupTokens *RegisterPickupTokenRepository
 	AppState             *AppStateRepository
 	Health               *HealthRepository
+	// WebhookDeliveries persists the owner-visible webhook delivery history
+	// (migration 040): one row per delivery attempt, ring-bounded per owner.
+	WebhookDeliveries *WebhookDeliveryRepository
 }
 
 func NewRepositories(database *gorm.DB) *Repositories {
@@ -23,6 +26,7 @@ func NewRepositories(database *gorm.DB) *Repositories {
 		RegisterPickupTokens: NewRegisterPickupTokenRepository(database),
 		AppState:             NewAppStateRepository(database),
 		Health:               NewHealthRepository(database),
+		WebhookDeliveries:    NewWebhookDeliveryRepository(database),
 	}
 }
 

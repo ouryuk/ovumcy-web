@@ -95,13 +95,14 @@ func (provider i18nDisclaimerProvider) Message(language string, key string) stri
 func BuildNotifyService(repositories *db.Repositories, secretKey []byte, i18nManager *i18n.Manager, blockPrivateAddresses bool) *services.WebhookNotifyService {
 	webhookSettings := services.NewWebhookSettingsService(repositories.Users, secretKey)
 	deliverer := services.NewWebhookDeliverer(blockPrivateAddresses)
+	history := services.NewWebhookDeliveryHistory(repositories.WebhookDeliveries)
 	return services.NewWebhookNotifyService(
 		repositories.Users,
 		repositories.DailyLogs,
 		webhookSettings,
 		deliverer,
 		i18nDisclaimerProvider{manager: i18nManager},
-	)
+	).WithDeliveryHistory(history)
 }
 
 // BuildDependencies wires the repositories and configuration into the domain
@@ -160,7 +161,7 @@ func BuildDependencies(repositories *db.Repositories, secretKey []byte, i18nMana
 		webhookSettingsService,
 		services.NewWebhookDeliverer(opts.WebhookBlockPrivateAddresses),
 		i18nDisclaimerProvider{manager: i18nManager},
-	)
+	).WithDeliveryHistory(services.NewWebhookDeliveryHistory(repositories.WebhookDeliveries))
 	egressLedgerService := services.NewEgressLedgerService(webhookSettingsService, calendarFeedSettingsService, opts.OutboundDeliveryEnabled)
 	totpService := services.NewTOTPService(repositories.Users, secretKey, attemptLimiter)
 	// Every session-issuing path consults the same derived TOTP-verifiability

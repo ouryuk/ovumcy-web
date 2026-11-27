@@ -368,6 +368,67 @@ components:
           enum: [true]
       additionalProperties: false
 
+    WebhookDelivery:
+      type: object
+      description: |
+        One webhook delivery attempt, as the owner-visible history publishes it.
+        There is deliberately no url, path, query or token field to leak: the
+        destination is reduced to its HOST, and the failure to a bounded CLASS.
+      required: [occurred_at, reminder_kind, outcome, http_status, latency_ms]
+      properties:
+        occurred_at:
+          type: string
+          format: date-time
+          description: When the attempt was made (RFC3339).
+        reminder_kind:
+          type: string
+          enum: [period, ovulation, test]
+          description: |
+            What the attempt carried. `test` is an owner-initiated test message
+            and is never a period or ovulation reminder.
+        outcome:
+          type: string
+          enum: [ok, refused, error]
+          description: |
+            `ok` — the endpoint answered 2xx. `refused` — the endpoint answered,
+            and its answer was not a 2xx. `error` — the request never completed.
+        http_status:
+          type: integer
+          description: |
+            The endpoint's own status code, or 0 when there was no response at
+            all (a timeout, a refused dial, a DNS failure).
+        error_class:
+          type: string
+          enum: [timeout, dns, tls, refused_redirect, private_address, http_error, transport]
+          description: |
+            The bounded failure class, absent when the attempt did not fail. It
+            names the KIND of failure and never the error text.
+        latency_ms:
+          type: integer
+          description: The attempt's measured duration in milliseconds.
+        endpoint_host:
+          type: string
+          description: |
+            The destination HOSTNAME only. Never the URL, its path, its query
+            string, or any embedded token. Absent when the host could not be
+            determined.
+      additionalProperties: false
+
+    WebhookDeliveriesResponse:
+      type: object
+      required: [deliveries, limit]
+      properties:
+        deliveries:
+          type: array
+          description: The owner's newest delivery attempts, newest first.
+          items: { $ref: '#/components/schemas/WebhookDelivery' }
+        limit:
+          type: integer
+          description: |
+            The ring size the list is capped at, so a client can tell "there
+            are no more" from "there are more than we publish".
+      additionalProperties: false
+
     ImportResult:
       type: object
       required: [ok, added, skipped, rejected]
@@ -2550,7 +2611,68 @@ paths:
                 error_detail: { key: "webhook test failed", category: "internal", target: "settings_form" }
         '429': { $ref: '#/components/responses/RateLimited' }
 
-  /api/v1/users/current/calendar-feed:
+  /api/v1/users/current/webhook/deliveries:
+    get:
+      tags: [settings]
+      summary: List the owner's recent webhook delivery attempts (owner only).
+      description: |
+        Returns the CURRENT owner's newest webhook delivery attempts, newest
+        first, at most 20 of them — the same ring the instance keeps per owner
+        (older rows are pruned on insert). The owner id comes from the
+        authenticated session and is never read from the request, so no request
+        shape can ask for another owner's history.
+
+        Each row carries the time of the attempt, the reminder kind (`period`,
+        `ovulation`, or `test`), the outcome (`ok`, `refused`, or `error`), the
+        endpoint's own status code (0 when there was no response at all), the
+        bounded failure class (`timeout`, `dns`, `tls`, `refused_redirect`,
+        `private_address`, `http_error`, `transport` — empty when the attempt
+        did not fail), the measured latency, and the destination HOST only.
+
+        A row NEVER carries the endpoint URL — its path, its query string, or a
+        token embedded in either — and never an error message (a transport error
+        text can embed the URL). The failure is reported as a bounded class so
+        the owner can tell a timeout from a DNS failure from a refusal without
+        the instance ever echoing a secret.
+
+        An empty history is an empty array with `200`, not a `404`: an owner who
+        has just configured an endpoint has no attempts yet, which is a state
+        rather than a missing thing.
+      responses:
+        '200':
+          description: The owner's recent delivery attempts, newest first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookDeliveriesResponse' }
+              example:
+                limit: 20
+                deliveries:
+                  - occurred_at: "2026-11-27T09:15:00Z"
+                    reminder_kind: period
+                    outcome: ok
+                    http_status: 200
+                    latency_ms: 84
+                    endpoint_host: ntfy.example.com
+                  - occurred_at: "2026-11-26T09:15:00Z"
+                    reminder_kind: ovulation
+                    outcome: error
+                    http_status: 0
+                    error_class: timeout
+                    latency_ms: 5000
+                    endpoint_host: ntfy.example.com
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500':
+          description: |
+            The delivery history could not be read. The response carries no row
+            contents and no URL.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+              example:
+                error: "failed to load webhook deliveries"
+                error_detail: { key: "failed to load webhook deliveries", category: "internal", target: "global" }
+        '429': { $ref: '#/components/responses/RateLimited' }
     post:
       tags: [settings]
       summary: Generate (enable) the calendar (.ics) feed (owner only).

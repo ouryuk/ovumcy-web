@@ -1327,6 +1327,14 @@ func (repo *UserRepository) ClearAllDataAndResetSettings(ctx context.Context, us
 		if err := tx.Where("user_id = ? AND is_builtin = ?", userID, false).Delete(&models.SymptomType{}).Error; err != nil {
 			return err
 		}
+		// The webhook delivery history (migration 040) goes with the data it
+		// describes: every row names a reminder kind that was sent for a cycle
+		// the wipe just erased, so leaving them would let the owner read back
+		// a delivery history of an emptied account. The rows are owner-scoped
+		// and the wipe is owner-scoped, so this deletes exactly this owner's.
+		if err := tx.Where("user_id = ?", userID).Delete(&models.WebhookDelivery{}).Error; err != nil {
+			return err
+		}
 		return tx.Model(&models.User{}).Where("id = ?", userID).Updates(map[string]any{
 			"cycle_length":  models.DefaultCycleLength,
 			"period_length": models.DefaultPeriodLength,
@@ -1467,6 +1475,14 @@ func (repo *UserRepository) DeleteAccountAndRelatedData(ctx context.Context, use
 		// after erasure — migration 033 deleted them, so every row in the table is
 		// now attributable and this delete covers all of them.
 		if err := tx.Where("user_id = ?", userID).Delete(&models.OIDCLogoutState{}).Error; err != nil {
+			return err
+		}
+		// webhook_deliveries (migration 040) carries the owner's delivery
+		// history: it names the reminder kinds that were sent and when. It is
+		// owner-scoped data, so it goes with the account -- and it is deleted
+		// explicitly rather than left to ON DELETE CASCADE, because erasure
+		// completeness must hold even when foreign keys are not enforced.
+		if err := tx.Where("user_id = ?", userID).Delete(&models.WebhookDelivery{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&models.User{}, userID).Error

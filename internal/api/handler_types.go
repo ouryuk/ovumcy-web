@@ -49,6 +49,7 @@ type Handler struct {
 	settingsViewService  *services.SettingsViewService
 	webhookSettingsSvc   *services.WebhookSettingsService
 	webhookNotifySvc     *services.WebhookNotifyService
+	webhookDeliveryHist  *services.WebhookDeliveryHistory
 	onboardingSvc        *services.OnboardingService
 	setupService         *services.SetupService
 	totpService          *services.TOTPService

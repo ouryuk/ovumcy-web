@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/ovumcy/ovumcy-web/internal/models"
 )
 
 // Webhook outbound delivery (issue #124, slice 3). This file owns the SINGLE
@@ -125,6 +128,47 @@ type WebhookDeliverer interface {
 	// bad scheme, transport error) is a failure. It must never log the URL beyond
 	// its hostname, and never the body.
 	Deliver(ctx context.Context, decryptedURL string, payload WebhookPayload) error
+}
+
+// WebhookDeliveryOutcome is what ONE delivery attempt amounted to, in the shape
+// the owner-visible delivery history records it.
+//
+// It is deliberately a struct of FACTS and not a re-wrapping of the error: the
+// history row must never carry the error's text (a transport error embeds the
+// URL it was raised for, and the URL can carry an ntfy token), so what the
+// recorder stores is the class, the status code and the latency, and the error
+// itself stays where it was raised.
+//
+// HTTPStatus is 0 when there was no response at all, which is what separates
+// "the endpoint said no" from "the endpoint was never reached".
+type WebhookDeliveryOutcome struct {
+	// HTTPStatus is the endpoint's own status code, or 0 when no response
+	// arrived.
+	HTTPStatus int
+	// ErrorClass is the bounded failure class (models.WebhookDeliveryError*),
+	// or "" when the attempt did not fail.
+	ErrorClass string
+	// LatencyMS is the measured duration of the attempt in milliseconds.
+	LatencyMS int
+	// Host is the destination HOSTNAME ONLY — the same hostOnly redaction
+	// every other surface applies. Never the URL, its path, its query string
+	// or its userinfo.
+	Host string
+}
+
+// WebhookOutcomeDeliverer is the OPTIONAL extension of WebhookDeliverer that
+// reports what an attempt amounted to. The notify service uses it when the
+// deliverer implements it and falls back to a generic failure class when it
+// does not, so a test stub that only implements Deliver still compiles and
+// still exercises the recording path.
+//
+// It is an interface and not a widened Deliver signature on purpose: Deliver
+// is the seam every existing stub implements, and changing its signature
+// would rewrite every one of them for a detail only the history needs.
+type WebhookOutcomeDeliverer interface {
+	// DeliverWithOutcome behaves exactly like Deliver and additionally reports
+	// the outcome's facts. Its error value is the same one Deliver returns.
+	DeliverWithOutcome(ctx context.Context, decryptedURL string, payload WebhookPayload) (WebhookDeliveryOutcome, error)
 }
 
 // blockPrivateAddresses, when true, denies delivery to private/loopback/
@@ -256,17 +300,36 @@ func guardedDialContext(dial dialFunc, resolver ipResolver) dialFunc {
 // key plus the destination HOST and (when available) the status code — never the
 // URL, query, userinfo, or response body — and returns an error that likewise
 // carries no secret.
+//
+// It is the thin half of WebhookOutcomeDeliverer: the facts of the attempt
+// (status, failure class, latency) are computed once, by DeliverWithOutcome,
+// and this drops them because this caller does not want them.
 func (client *webhookDeliveryClient) Deliver(ctx context.Context, decryptedURL string, payload WebhookPayload) error {
+	_, err := client.DeliverWithOutcome(ctx, decryptedURL, payload)
+	return err
+}
+
+// DeliverWithOutcome POSTs the payload as JSON to decryptedURL under the
+// hardened envelope, and additionally reports what the attempt amounted to:
+// the endpoint's status code (0 when there was no response), the bounded
+// failure class, the measured latency, and the destination HOST only.
+//
+// The outcome is the same facts the log line below already carries, exposed
+// as data rather than as text — so the owner-visible delivery history can
+// record WHAT happened without ever recording the error's message (which
+// embeds the URL, and the URL can carry an ntfy token).
+func (client *webhookDeliveryClient) DeliverWithOutcome(ctx context.Context, decryptedURL string, payload WebhookPayload) (WebhookDeliveryOutcome, error) {
+	startedAt := time.Now()
 	parsed, err := url.Parse(strings.TrimSpace(decryptedURL))
 	if err != nil {
 		// Do not wrap: url.Parse's error embeds the raw URL. Log host-less.
 		log.Printf("webhook delivery skipped: reason=url_parse_failed")
-		return ErrWebhookDeliveryURLScheme
+		return WebhookDeliveryOutcome{ErrorClass: models.WebhookDeliveryErrorTransport, LatencyMS: elapsedMs(startedAt)}, ErrWebhookDeliveryURLScheme
 	}
 	scheme := strings.ToLower(parsed.Scheme)
 	if scheme != "http" && scheme != "https" {
 		log.Printf("webhook delivery skipped: reason=scheme_not_allowed host=%s", parsed.Hostname())
-		return ErrWebhookDeliveryURLScheme
+		return WebhookDeliveryOutcome{ErrorClass: models.WebhookDeliveryErrorTransport, LatencyMS: elapsedMs(startedAt), Host: parsed.Hostname()}, ErrWebhookDeliveryURLScheme
 	}
 
 	// Re-run the authority shape check the save path already applies. Save-time
@@ -277,12 +340,12 @@ func (client *webhookDeliveryClient) Deliver(ctx context.Context, decryptedURL s
 	// unspecified address and connects to the local machine.
 	if err := validateWebhookAuthority(parsed); err != nil {
 		log.Printf("webhook delivery skipped: reason=authority_invalid host=%s", parsed.Hostname())
-		return ErrWebhookDeliveryURLScheme
+		return WebhookDeliveryOutcome{ErrorClass: models.WebhookDeliveryErrorTransport, LatencyMS: elapsedMs(startedAt), Host: parsed.Hostname()}, ErrWebhookDeliveryURLScheme
 	}
 
 	if client.blockPrivateAddresses && isPrivateHost(parsed.Hostname()) {
 		log.Printf("webhook delivery skipped: reason=private_address_blocked host=%s", parsed.Hostname())
-		return fmt.Errorf("webhook delivery to private address refused")
+		return WebhookDeliveryOutcome{ErrorClass: models.WebhookDeliveryErrorPrivateAddress, LatencyMS: elapsedMs(startedAt), Host: parsed.Hostname()}, fmt.Errorf("webhook delivery to private address refused")
 	}
 
 	body, err := json.Marshal(payload)
@@ -291,7 +354,7 @@ func (client *webhookDeliveryClient) Deliver(ctx context.Context, decryptedURL s
 		// fields, so json.Marshal cannot fail here. Kept as a fail-safe so a future
 		// unmarshalable field never delivers a malformed body.
 		log.Printf("webhook delivery skipped: reason=payload_marshal_failed host=%s", parsed.Hostname())
-		return fmt.Errorf("marshal webhook payload: %w", err)
+		return WebhookDeliveryOutcome{ErrorClass: models.WebhookDeliveryErrorTransport, LatencyMS: elapsedMs(startedAt), Host: parsed.Hostname()}, fmt.Errorf("marshal webhook payload: %w", err)
 	}
 
 	requestCtx, cancel := context.WithTimeout(ctx, webhookDeliveryTimeout)
@@ -302,7 +365,7 @@ func (client *webhookDeliveryClient) Deliver(ctx context.Context, decryptedURL s
 		// codecov:ignore -- unreachable in practice: method is constant and the URL
 		// already parsed above, so NewRequestWithContext does not fail here.
 		log.Printf("webhook delivery skipped: reason=build_request_failed host=%s", parsed.Hostname())
-		return fmt.Errorf("build webhook request: %w", err)
+		return WebhookDeliveryOutcome{ErrorClass: models.WebhookDeliveryErrorTransport, LatencyMS: elapsedMs(startedAt), Host: parsed.Hostname()}, fmt.Errorf("build webhook request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", webhookUserAgent)
@@ -313,18 +376,23 @@ func (client *webhookDeliveryClient) Deliver(ctx context.Context, decryptedURL s
 		// *url.Error; classify it so the reason key is stable without logging the
 		// (secret-bearing) location or the resolved IP.
 		reason := "transport_error"
+		errorClass := models.WebhookDeliveryErrorTransport
 		switch {
 		case isRedirectRefusal(err):
 			reason = "redirect_refused"
+			errorClass = models.WebhookDeliveryErrorRefusedRedirect
 		case errors.Is(err, errWebhookPrivateAddress):
 			reason = "private_address_blocked"
+			errorClass = models.WebhookDeliveryErrorPrivateAddress
+		default:
+			errorClass = classifyWebhookTransportError(err)
 		}
 		log.Printf("webhook delivery failed: reason=%s host=%s", reason, parsed.Hostname())
 		// Return a HOST-ONLY error: the transport error (*url.Error) embeds the full
 		// request URL — which may carry an ntfy token in its userinfo/query — in its
 		// message, so it must never be wrapped (%w) into a returned error a future
 		// caller might log. Reason + host is all a caller needs.
-		return fmt.Errorf("webhook delivery to host %q failed: %s", parsed.Hostname(), reason)
+		return WebhookDeliveryOutcome{ErrorClass: errorClass, LatencyMS: elapsedMs(startedAt), Host: parsed.Hostname()}, fmt.Errorf("webhook delivery to host %q failed: %s", parsed.Hostname(), reason)
 	}
 	defer func() {
 		// Drain (bounded) and close so the connection can be reused/released; the
@@ -335,9 +403,71 @@ func (client *webhookDeliveryClient) Deliver(ctx context.Context, decryptedURL s
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		log.Printf("webhook delivery failed: reason=non_2xx host=%s status=%d", parsed.Hostname(), response.StatusCode)
-		return fmt.Errorf("webhook delivery to host %q returned status %d", parsed.Hostname(), response.StatusCode)
+		return WebhookDeliveryOutcome{HTTPStatus: response.StatusCode, ErrorClass: models.WebhookDeliveryErrorHTTP, LatencyMS: elapsedMs(startedAt), Host: parsed.Hostname()}, fmt.Errorf("webhook delivery to host %q returned status %d", parsed.Hostname(), response.StatusCode)
 	}
-	return nil
+	return WebhookDeliveryOutcome{HTTPStatus: response.StatusCode, LatencyMS: elapsedMs(startedAt), Host: parsed.Hostname()}, nil
+}
+
+// elapsedMs returns the milliseconds elapsed since startedAt, never negative
+// and never negative-looking: the clock this reads can step backwards, and a
+// negative latency would render as a nonsense figure on the owner's page.
+func elapsedMs(startedAt time.Time) int {
+	elapsed := time.Since(startedAt).Milliseconds()
+	if elapsed < 0 {
+		return 0
+	}
+	return int(elapsed)
+}
+
+// classifyWebhookTransportError names the KIND of a transport failure, so the
+// owner-visible history can show WHY a delivery did not arrive without ever
+// showing the error's text (which embeds the URL, and the URL can carry a
+// token).
+//
+// The classes are the ones an owner can act on differently: a timeout says the
+// endpoint is too slow or unreachable, a DNS failure says the HOSTNAME does
+// not resolve, a TLS failure says the endpoint's certificate did not verify.
+// Everything else is a plain transport failure.
+//
+// The classification reads the typed errors the standard library wraps the
+// transport failures in: a net.Error that reports a timeout, a *net.DNSError
+// for a resolution failure, and a tls.CertificateVerificationError for a
+// handshake that did not verify. The URL error wraps them all, so the chain is
+// walked with errors.As rather than by matching the message.
+func classifyWebhookTransportError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	var dnsError *net.DNSError
+	if errors.As(err, &dnsError) {
+		return models.WebhookDeliveryErrorDNS
+	}
+
+	var certificateError *tls.CertificateVerificationError
+	if errors.As(err, &certificateError) {
+		return models.WebhookDeliveryErrorTLS
+	}
+
+	// A TLS handshake that fails for a reason other than certificate
+	// verification (a protocol mismatch, an alert) arrives as a plain error
+	// from the handshake, not as a typed one. The stdlib marks those with
+	// "tls:" in the message; that is the only place the class is available,
+	// and it is read from the TYPE, never from the URL the message carries.
+	var handshakeError *tls.ConnError
+	if errors.As(err, &handshakeError) {
+		return models.WebhookDeliveryErrorTLS
+	}
+
+	var netError net.Error
+	if errors.As(err, &netError) && netError.Timeout() {
+		return models.WebhookDeliveryErrorTimeout
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return models.WebhookDeliveryErrorTimeout
+	}
+
+	return models.WebhookDeliveryErrorTransport
 }
 
 // isRedirectRefusal reports whether err is our zero-redirect refusal, which the

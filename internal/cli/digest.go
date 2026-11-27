@@ -75,24 +75,24 @@ type digestOptions struct {
 // a digest is a VIEW over summary, trends and predict, and a view that
 // recomputed its own numbers would be a fourth implementation to keep in step.
 type DigestDocument struct {
-	Schema      string             `json:"schema"`
-	GeneratedAt string             `json:"generated_at"`
-	User        digestUserSummary  `json:"user"`
-	Timezone    string             `json:"timezone"`
+	Schema      string            `json:"schema"`
+	GeneratedAt string            `json:"generated_at"`
+	User        digestUserSummary `json:"user"`
+	Timezone    string            `json:"timezone"`
 	// Language is the language the digest is rendered in (Spanish, fixed by this
 	// slice). OwnerLanguage is the owner's persisted interface language, carried
 	// so a consumer can see what the rest of the product shows them.
-	Language      string `json:"language"`
-	OwnerLanguage string `json:"owner_language"`
-	AsOf        string             `json:"as_of"`
-	WindowDays  int                `json:"window_days"`
-	From        string             `json:"from"`
-	To          string             `json:"to"`
-	Summary     SummaryDocument    `json:"summary"`
-	Trends      TrendsDocument     `json:"trends"`
-	Predict     PredictDocument    `json:"predict"`
-	Disclaimer  string             `json:"disclaimer"`
-	Delivery    *digestDeliveryDoc `json:"delivery,omitempty"`
+	Language      string             `json:"language"`
+	OwnerLanguage string             `json:"owner_language"`
+	AsOf          string             `json:"as_of"`
+	WindowDays    int                `json:"window_days"`
+	From          string             `json:"from"`
+	To            string             `json:"to"`
+	Summary       SummaryDocument    `json:"summary"`
+	Trends        TrendsDocument     `json:"trends"`
+	Predict       PredictDocument    `json:"predict"`
+	Disclaimer    string             `json:"disclaimer"`
+	Delivery      *digestDeliveryDoc `json:"delivery,omitempty"`
 }
 
 type digestUserSummary struct {
@@ -135,6 +135,9 @@ type digestNotifier struct {
 	settings  *services.WebhookSettingsService
 	deliverer services.WebhookDeliverer
 }
+
+// digestNotifier implements digestDelivery.
+var _ digestDelivery = (*digestNotifier)(nil)
 
 // NewDigestNotifier builds the --ntfy delivery seam over the shipped webhook
 // components. secretKey is the same SECRET_KEY the web binary and `ovumcy notify`
@@ -240,7 +243,9 @@ func runDigestDelivery(databaseConfig db.Config, secretKey string, blockPrivateA
 	}()
 
 	repositories, _ := buildRepositories(database, calendarFeedFencePath())
-	notifier := NewDigestNotifier(repositories.Users, secretKey, blockPrivateAddresses)
+	// Typed as the interface, not the concrete notifier: the production path and a
+	// test stub are interchangeable here, which is the whole point of the seam.
+	var notifier digestDelivery = NewDigestNotifier(repositories.Users, secretKey, blockPrivateAddresses)
 	host, err := notifier.Deliver(context.Background(), userID, markdown)
 	report.Host = host
 	if err != nil {

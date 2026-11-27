@@ -288,7 +288,7 @@ Use the scripted form when you need to recover several accounts at once — for 
 
 Every subcommand above applies any pending migrations first, exactly as the server does, so none of them runs on a database a migration is refusing. The one that does not is `ovumcy repair`, which exists for that case and opens the database without applying anything. It is also the subcommand you are most likely to reach with `docker compose run --rm` rather than `docker exec`, because the container it would attach to is usually down when you need it. See [Duplicate rows that refuse a migration](#duplicate-rows-that-refuse-a-migration).
 
-**Read-only reporting commands.** The same binary carries a family of read-only operator commands that report on one owner's records: `export`, `summary`, `trends` and `predict`. All four write nothing and need no `SECRET_KEY` (only the database config, which the container already has), so they run as a plain `docker exec ovumcy /app/ovumcy <command> …` with nothing else to pass in. Like the other subcommands, they apply any pending migrations first, exactly as the server does. The owner is resolved by email or by `--id <id>`; an address matching several rows is refused, naming the ids — retry with `--id` (find it with `docker exec ovumcy /app/ovumcy users list`).
+**Read-only reporting commands.** The same binary carries a family of read-only operator commands that report on one owner's records: `export`, `summary`, `trends`, `predict` and `digest`. All five write nothing; the first four need no `SECRET_KEY` (only the database config, which the container already has), so they run as a plain `docker exec ovumcy /app/ovumcy <command> …` with nothing else to pass in. `digest` is the exception only when `--ntfy` is passed: that one flag reads the owner's stored webhook endpoint and so needs the same `SECRET_KEY` the server and `notify` use. Like the other subcommands, they apply any pending migrations first, exactly as the server does. The owner is resolved by email or by `--id <id>`; an address matching several rows is refused, naming the ids — retry with `--id` (find it with `docker exec ovumcy /app/ovumcy users list`).
 
 ```bash
 # Usage lines, exactly as a usage error prints them:
@@ -296,6 +296,7 @@ Every subcommand above applies any pending migrations first, exactly as the serv
 #   ovumcy summary <email> [--id <id>] [--days 7|30|90] [--json]
 #   ovumcy trends <email> [--id <id>] [--tz <IANA name>] [--json]
 #   ovumcy predict <email> [--id <id>] [--tz <IANA name>] [--json]
+#   ovumcy digest <email> [--id <id>] [--week] [--days N] [--format markdown|json] [--tz <IANA name>] [--ntfy]
 
 # Full record of one owner as JSON (ovumcy-export/v1), captured on the host.
 docker exec ovumcy /app/ovumcy export owner@example.com > owner.json
@@ -308,13 +309,17 @@ docker exec ovumcy /app/ovumcy trends --id 7 --tz Europe/Madrid --json
 
 # Projected next period, ovulation date and fertile window (ovumcy-predict/v1).
 docker exec ovumcy /app/ovumcy predict owner@example.com --json
+
+# Shareable Spanish Markdown digest of the last week.
+docker exec ovumcy /app/ovumcy digest owner@example.com --week
 ```
 
 - `export` writes every daily log, the symptom vocabulary as the owner defined it, and the cycle-start dates — never auth material (password/recovery hashes, webhook endpoints). It goes to stdout, or to `--out <path>`, a file created with mode `0600` inside the container; redirecting stdout to a host file (as above) is the usual way to get it off the host-less filesystem. The output is intimate health data: treat the captured file like the database volume.
 - `summary` covers a `--days 7|30|90` window (default `30`): adherence, symptom tallies, best/worst mood days and the longest logging streak.
 - `trends` uses the owner's full history and the same completed-cycle phase contexts the stats page uses; `--tz` (IANA name, default `UTC`) decides which calendar day a log falls on.
 - `predict` reuses the dashboard's derivation (`services.BuildCycleStatsFromLogs`), so it reports what the dashboard would for that account at that instant. It prints where the owner stands today and the cycle basis the projection rests on (completed cycles, median, predicted cycle and period lengths, luteal phase). While a pregnancy pause is active the projection is suppressed and the output says so; with no cycle history it says nothing can be projected yet; and the output always carries the projection disclaimer (*these dates are projections from past cycles, not guarantees*), in the table and in the JSON `disclaimer` field alike. The math is described in [docs/cycle-prediction.md](cycle-prediction.md).
-- Each `--json` payload carries a `schema` tag — `ovumcy-export/v1`, `ovumcy-summary/v1`, `ovumcy-trends/v1`, `ovumcy-predict/v1` — so a script can detect which shape it is reading.
+- `digest` composes the summary, trends and predict reports into one Spanish-language Markdown digest (or `--format json`, `ovumcy-digest/v1`, whose `summary`/`trends`/`predict` fields are those shipped documents verbatim). `--week` selects a seven-day window (default `--days 30`, up to `90`); the window closes on the owner's own calendar day, from the stored `users.timezone` or `--tz`. `--ntfy` opt-ins delivery through the owner's **already-stored** webhook endpoint — the same one `notify` uses, so no new egress target appears — and that is the only mode needing `SECRET_KEY`. The digest prints whatever the outcome and the command exits non-zero if delivery fails.
+- Each `--json` payload carries a `schema` tag — `ovumcy-export/v1`, `ovumcy-summary/v1`, `ovumcy-trends/v1`, `ovumcy-predict/v1`, `ovumcy-digest/v1` — so a script can detect which shape it is reading.
 
 For the public reverse-proxy stacks, do not treat a missing host-level `127.0.0.1:8080` listener as a problem. In the preferred deployment model, that port is intentionally not published to the host at all.
 

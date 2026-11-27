@@ -25,7 +25,7 @@ func tryRunCLICommand() (bool, error) {
 		runSummary:          cli.RunSummaryCommand,
 		runTrends:           cli.RunTrendsCommand,
 		runPredict:          cli.RunPredictCommand,
-		runDigest:           cli.RunDigestCommand,           // codecov:ignore -- main() composition-root wiring; this os.Args dispatch wrapper runs only in the binary (the handler is unit-tested via tryRunCLICommandWithHandlers with a stub)
+		runDigest:           cli.RunDigestCommand, // codecov:ignore -- main() composition-root wiring; this os.Args dispatch wrapper runs only in the binary (the handler is unit-tested via tryRunCLICommandWithHandlers with a stub)
 	})
 }
 

@@ -52,12 +52,6 @@ func TestOpenDatabaseReadOnlyRefusesWritesAndLeavesTheFileAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read database before: %v", err)
 	}
-	// The sidecars the closing writer left behind, if any. SQLite may remove
-	// `-wal`/`-shm` on a clean close or leave them for the next connection, and
-	// which one it does is not this test's subject — what the read-only open
-	// must not do is ADD one, which is why the assertion below compares the set
-	// before with the set after instead of requiring both to be absent.
-	beforeSidecars := sqliteSidecars(databasePath)
 
 	readOnly, err := OpenDatabaseReadOnly(Config{Driver: DriverSQLite, SQLitePath: databasePath})
 	if err != nil {
@@ -97,22 +91,32 @@ func TestOpenDatabaseReadOnlyRefusesWritesAndLeavesTheFileAlone(t *testing.T) {
 	if err := readOnlySQL.Close(); err != nil {
 		t.Fatalf("close read-only handle: %v", err)
 	}
-	for sidecar := range sqliteSidecars(databasePath) {
-		if !beforeSidecars[sidecar] {
-			t.Fatalf("read-only open created %s", filepath.Base(sidecar))
-		}
-	}
-}
 
-// sqliteSidecars reports which of the WAL sidecar files exist beside dbPath.
-func sqliteSidecars(dbPath string) map[string]bool {
-	present := make(map[string]bool, 2)
-	for _, suffix := range []string{"-wal", "-shm"} {
-		if _, err := os.Stat(dbPath + suffix); err == nil {
-			present[dbPath+suffix] = true
+	// The DATA file is the thing the subcommands must not touch, and it is
+	// byte-identical: no migration ran, no journal mode changed, nothing was
+	// written through the handle above. That is the contract.
+	//
+	// What SQLite still creates beside it is a zero-byte `-wal` and a `-shm`
+	// shared-memory block, and that is not something this layer can avoid: a
+	// read-only connection to a WAL-mode database needs the shared-memory
+	// index to see the WAL's contents at all. `mode=ro` on its own does
+	// exactly the same (measured), and the two alternatives are worse:
+	// `nolock=1` cannot read the file, and `immutable=1` reads a LIVE
+	// database as ZERO ROWS because it ignores the WAL entirely — an export
+	// that silently reports no data. Asserted below instead: the scaffolding
+	// carries no data (`-wal` is empty) and the file itself is untouched.
+	for _, sidecar := range []string{"-wal", "-shm"} {
+		info, err := os.Stat(databasePath + sidecar)
+		if err != nil {
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			t.Fatalf("%s is not a regular file", filepath.Base(databasePath+sidecar))
+		}
+		if strings.HasSuffix(sidecar, "-wal") && info.Size() != 0 {
+			t.Fatalf("the read-only handle left %d bytes in %s: it wrote a transaction", info.Size(), filepath.Base(databasePath+sidecar))
 		}
 	}
-	return present
 }
 
 // TestOpenDatabaseReadOnlyDoesNotCreateAMissingDatabase: a reporting subcommand

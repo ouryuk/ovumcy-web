@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -301,23 +302,26 @@ func TestReadOnlyCommandsDoNotTouchTheDatabaseFile(t *testing.T) {
 	}
 }
 
-// cliDatabaseFingerprint summarises the database file and its WAL sidecars:
-// which of them exist, and each one's size and modification time. Any write —
-// by a command, a migration, or a checkpoint — changes at least one of those,
-// and a read-only connection changes none.
+// cliDatabaseFingerprint summarises the DATA file: its size and a hash of its
+// bytes. Any write through the file — an UPDATE, a migration, a journal-mode
+// change, a checkpoint — alters those, so a command that only reads cannot
+// produce the same fingerprint.
+//
+// The WAL sidecars are deliberately not part of it. A read-only connection to a
+// WAL-mode database MUST map the shared-memory index to see committed data, so
+// SQLite creates a zero-byte `-wal` and an `-shm` on the first such open, and
+// their mtimes move; that is scaffolding, not data (measured, and documented in
+// internal/db/sqlite.go). Hashing the bytes is the stronger claim anyway: a
+// same-size write with a preserved mtime would slip past a stat-based
+// fingerprint and cannot slip past this one.
 func cliDatabaseFingerprint(t *testing.T, databasePath string) string {
 	t.Helper()
 
-	var parts []string
-	for _, path := range []string{databasePath, databasePath + "-wal", databasePath + "-shm"} {
-		info, err := os.Stat(path)
-		if err != nil {
-			parts = append(parts, filepath.Base(path)+"=absent")
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("%s=%d@%d", filepath.Base(path), info.Size(), info.ModTime().UnixNano()))
+	contents, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatalf("fingerprint %s: %v", filepath.Base(databasePath), err)
 	}
-	return strings.Join(parts, " ")
+	return fmt.Sprintf("%s=%d bytes sha256=%x", filepath.Base(databasePath), len(contents), sha256.Sum256(contents))
 }
 
 // TestExportOutFileIsAlwaysOwnerOnly is defect #4's file half: `--out` onto an

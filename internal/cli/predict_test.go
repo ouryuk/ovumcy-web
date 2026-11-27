@@ -182,8 +182,13 @@ func TestRunPredictCommandAcceptsIDAndRejectsBadInput(t *testing.T) {
 	if _, err := parsePredictArgs([]string{"a@example.com", "b@example.com"}); err == nil {
 		t.Fatalf("expected usage error for a second positional")
 	}
+	// --tz=UTC must mark the zone as EXPLICITLY set: tzSet is what makes the
+	// command honour the flag over the account's stored zone, so a spelled-out
+	// --tz=UTC has to override users.timezone exactly like any other name. The
+	// assertion used to require tzSet to be false, which pinned the old
+	// behaviour where an override could not be told apart from no flag at all.
 	opts, err := parsePredictArgs([]string{"--id=7", "--tz=UTC", "--json"})
-	if err != nil || opts.userID != 7 || !opts.asJSON || opts.tzSet {
+	if err != nil || opts.userID != 7 || !opts.asJSON || !opts.tzSet || opts.tz != "UTC" {
 		t.Fatalf("expected the flag=value form to parse, got %+v (%v)", opts, err)
 	}
 }

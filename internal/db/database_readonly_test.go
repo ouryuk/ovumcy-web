@@ -97,7 +97,7 @@ func TestOpenDatabaseReadOnlyRefusesWritesAndLeavesTheFileAlone(t *testing.T) {
 	if err := readOnlySQL.Close(); err != nil {
 		t.Fatalf("close read-only handle: %v", err)
 	}
-	for _, sidecar := range sqliteSidecars(databasePath) {
+	for sidecar := range sqliteSidecars(databasePath) {
 		if !beforeSidecars[sidecar] {
 			t.Fatalf("read-only open created %s", filepath.Base(sidecar))
 		}

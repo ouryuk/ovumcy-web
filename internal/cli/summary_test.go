@@ -344,9 +344,9 @@ func TestRunSummaryCommandArgumentErrorsExtended(t *testing.T) {
 
 	// A display-name address is refused up front, before any database work.
 	var output bytes.Buffer
-	err = runSummaryCommand(config, []string{"Owner <a@example.com>"}, &output)
-	if err == nil || !strings.Contains(err.Error(), "invalid email address") {
-		t.Fatalf("expected invalid-email error, got %v", err)
+	outputErr := runSummaryCommand(config, []string{"Owner <a@example.com>"}, &output)
+	if outputErr == nil || !strings.Contains(outputErr.Error(), "invalid email address") {
+		t.Fatalf("expected invalid-email error, got %v", outputErr)
 	}
 }
 

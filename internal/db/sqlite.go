@@ -10,10 +10,6 @@ import (
 	"gorm.io/gorm"
 )
 
-func openSQLiteConnection(dbPath string) (*gorm.DB, error) {
-	return openSQLiteConnectionWith(dbPath, sqliteReadWrite)
-}
-
 // sqliteOpenMode selects the DSN a SQLite connection is opened with.
 //
 // Two modes exist and the difference is a SAFETY property, not a preference:
@@ -36,11 +32,26 @@ const (
 	sqliteReadOnly sqliteOpenMode = true
 )
 
+// openSQLiteConnectionWith dispatches on the mode: the reporting commands'
+// read-only DSN, or the server's read-write one.
+//
+// openSQLiteConnection is not a wrapper around a generic implementation the way
+// a mode parameter usually implies — it IS the read-write implementation, and it
+// keeps that name because it is the entry point the pool-limit and
+// directory-creation tests drive by name. Inverting the two (a thin
+// openSQLiteConnection over a general opener) left the named function called
+// only from tests, which staticcheck reports as an unused symbol.
 func openSQLiteConnectionWith(dbPath string, mode sqliteOpenMode) (*gorm.DB, error) {
 	if mode == sqliteReadOnly {
 		return openSQLiteReadOnlyConnection(dbPath)
 	}
+	return openSQLiteConnection(dbPath)
+}
 
+// openSQLiteConnection opens the server's own connection: the file is created
+// if it does not exist, and every pooled connection may begin a write
+// transaction.
+func openSQLiteConnection(dbPath string) (*gorm.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o750); err != nil {
 		return nil, fmt.Errorf("create db directory: %w", err)
 	}

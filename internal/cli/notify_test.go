@@ -473,7 +473,7 @@ func TestRunNotifyPreflightTable(t *testing.T) {
 		services.PreflightReasonEndpointUnreadable,
 		services.PreflightReasonDeliveryDisabled,
 		services.PreflightReasonNotDue,
-		"1 owner(s) need attention",
+		"1 owner(s) need attention, 4 need none",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("preflight table missing %q: %q", want, text)
@@ -594,7 +594,7 @@ func TestRunNotifyPreflightOwnerFilter(t *testing.T) {
 		t.Fatalf("filtered table rendered the wrong rows: %q", table.String())
 	}
 
-	// A filter that matches nothing is an error, in both renderings.
+	// A filter that matches nothing is an error, on both renderings.
 	miss := &stubPreflightRunner{report: preflightFixtureReport()}
 	err := runNotifyPreflightCommand(miss, notifyOptions{preflight: true, owner: "99"}, now, time.UTC, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "no owner matched") {

@@ -124,7 +124,7 @@ but harmless (delivery is idempotent — see
 #### The `ovumcy notify` CLI
 
 ```
-usage: ovumcy notify [--dry-run] [--show-health-details] [--fail-on-delivery-error]
+usage: ovumcy notify [--dry-run] [--show-health-details] [--fail-on-delivery-error] [--preflight [--owner <id>] [--json]]
 ```
 
 - `--dry-run` computes what **would** be sent — owners scanned, reminders due,
@@ -163,6 +163,84 @@ example, mid-morning, so a period-due reminder for today already reflects
 "today" in the owner's own timezone rather than the previous day rolling over
 mid-cycle-check. See [Timezone behavior](#timezone-behavior) below for exactly
 which zone "today" is evaluated in.
+
+##### Diagnosing one silent owner: `--preflight`
+
+A finished pass reports what it did — owners scanned, how many reminders were
+due, delivered, failed — so it can tell you that an owner's reminders stopped,
+but not why. `ovumcy notify --preflight` answers the second question for every
+owner without sending anything:
+
+```bash
+ovumcy notify --preflight            # one row per owner
+ovumcy notify --preflight --json     # ovumcy-notify-preflight/v1 document
+ovumcy notify --preflight --owner 4  # only owner 4's row
+```
+
+It runs the **same walk** a real pass runs, in dry-run mode: no outbound request,
+no watermark claim, no delivery mark, no write of any kind. What changes is that
+each owner gets a verdict instead of only being counted:
+
+```
+Webhook notify preflight (ovumcy-notify-preflight/v1) - computed only: no request sent, no watermark written.
+Owners scanned: 3, listed: 3
+
+  OWNER  HOST           DUE  REASON                   NEXT ACTION
+  1      ntfy.example   1    ok                       Nothing to do: the next due reminder would be delivered
+  2      10.0.0.5       0    private_address_blocked  Act now: the host is private and WEBHOOK_BLOCK_PRIVATE_ADDRESSES is on - point at a routable host or turn the gate off
+  3      -              0    endpoint_unreadable      Act now: the endpoint cannot be decrypted - restore the SECRET_KEY that saved it, or re-save the URL
+
+2 owner(s) need attention, 1 need none.
+```
+
+The columns are the owner id, the destination **host only** (never the URL, its
+path, query, or token; `-` when no endpoint was readable), how many reminders a
+delivery pass would send right now, a stable machine-readable reason, and the
+next concrete fix in words. `--json` carries the same facts — `schema`,
+`generated_at`, `owners_scanned`, `owner`/`matched` when filtered, and an `owners`
+array of `owner_id`, `host`, `due`, `reason`, `detail`, `actionable`,
+`next_action` — so a script can branch on `reason` instead of parsing prose.
+
+This output is **safe to log**: it contains no URL, token, ciphertext, reminder
+type, or estimated date. Unlike `--dry-run --show-health-details`, it needs no
+consent flag.
+
+The reason keys, and what each one means for the operator:
+
+| `reason` | Meaning |
+| --- | --- |
+| `ok` | A reminder is due and would be delivered (`due` says how many). |
+| `delivery_disabled` | The owner switched webhook delivery off. |
+| `no_endpoint` | Delivery is on but no endpoint is stored. |
+| `endpoint_unreadable` | A URL is stored but cannot be decrypted — usually a `SECRET_KEY` rotation. The owner must re-save the URL. |
+| `endpoint_invalid` | The stored URL cannot be delivered to at all: unparseable, not `http`/`https`, or no host. |
+| `private_address_blocked` | The host is a private/loopback literal and `WEBHOOK_BLOCK_PRIVATE_ADDRESSES` is on. |
+| `logs_unreadable` | The owner's data could not be read, so the decision could not run. |
+| `predictions_suppressed` | Unpredictability mode, a pregnancy pause, or an overdue cycle withholds predictions by design. |
+| `no_reminder_kind` | Both the period and ovulation reminder switches are off. |
+| `already_sent` | This cycle's reminder was already delivered (its watermark covers it). |
+| `not_due` | Nothing is inside the lead window right now; the next scheduled pass decides again. |
+| `delivery_failed` | Only reported by a real pass, never by a preflight: the delivery failed. `detail` carries the deliverer's own key — `transport_error`, `redirect_refused`, `non_2xx`, `scheme_not_allowed`, `private_address_blocked`, or `claim_error`. |
+| `claim_lost` | Only from a real pass: another pass owns this send, or the configuration changed mid-pass. Not a failure. |
+
+When several blocks apply at once — an unreadable endpoint *and* an overdue
+cycle, say — exactly one reason is reported, first match wins: delivery switch,
+missing endpoint, unreadable endpoint, endpoint shape/egress gate, unreadable
+logs, then the cycle state (`no_reminder_kind`, `predictions_suppressed`,
+`already_sent`, `not_due`), then `ok`. An endpoint that can never be reached is
+reported as such even when nothing is due, because that is the defect worth
+fixing first; `due` is always the count the decision produced, so a blocked owner
+still shows how many reminders are waiting.
+
+A hostname that *resolves* into a private range is not resolved by the preflight
+(it makes no network call at all), so it reports `ok` here and `delivery_failed`
+with `detail=transport_error` or `private_address_blocked` on the real pass.
+
+`--owner` narrows the printed rows to one owner id — the walk itself still covers
+everyone — and an id that matches no owner is an error, not an empty table, so a
+typo cannot pass for a clean result. `--preflight` cannot be combined with
+`--fail-on-delivery-error` (a preflight has no delivery to fail), and `--json` /
+`--owner` are only valid with it.
 
 ##### Scheduling it
 

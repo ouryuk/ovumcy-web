@@ -427,8 +427,24 @@ func (service *WebhookNotifyService) processOwner(
 	// the private-literal half of the egress gate). Checked here only to EXPLAIN a
 	// target that cannot be delivered to; it changes nothing about the pass itself,
 	// which still hands the URL to the deliverer and records its verdict.
-	if reason := classifyPreflightEndpoint(decryptedURL, service.blockPrivateAddresses); reason != "" {
-		observe(host, 0, reason, "")
+	endpointBlock := classifyPreflightEndpoint(decryptedURL, service.blockPrivateAddresses)
+	if endpointBlock != "" {
+		observe(host, 0, endpointBlock, "")
+	}
+	// reportCycle records this owner's cycle-state verdict. A structural endpoint
+	// block OUTRANKS it: an owner whose endpoint can never be reached is silent
+	// whatever their cycle says, so "this would fail" must not be reported as
+	// "nothing to send" or "would send". The decision still runs unchanged — only
+	// the verdict prefers the defect — and the decision's own due count is kept
+	// beside the block, so "N reminders waiting behind a blocked endpoint" still
+	// reads off the row.
+	reportCycle := func(due int, reason string) {
+		switch {
+		case endpointBlock == "":
+			observe(host, due, reason, "")
+		case due > 0:
+			observe(host, due, endpointBlock, "")
+		}
 	}
 
 	dayLogs, err := service.logs.ListByUser(ctx, record.ID)
@@ -451,7 +467,7 @@ func (service *WebhookNotifyService) processOwner(
 
 	switch {
 	case len(due) == 0 && !ownerKindsEnabled(record):
-		observe(host, 0, PreflightReasonNoReminderKind, "")
+		reportCycle(0, PreflightReasonNoReminderKind)
 	case len(due) == 0:
 		// The decision emits nothing either because the medical-safety gate
 		// suppressed predictions for this owner or because no reminder is inside the
@@ -459,12 +475,12 @@ func (service *WebhookNotifyService) processOwner(
 		// because it was already sent). Decide which by asking the suppression
 		// predicate the decision itself consults — never a second prediction pass.
 		if suppression := ResolvePredictionSuppression(&user, BuildCycleStatsFromLogs(&user, dayLogs, now, ownerLocation)); suppression.PredictionsSuppressed {
-			observe(host, 0, PreflightReasonPredictionsSuppressed, "")
+			reportCycle(0, PreflightReasonPredictionsSuppressed)
 		} else {
-			observe(host, 0, preflightPendingReason(watermarkSuppressed), "")
+			reportCycle(0, preflightPendingReason(watermarkSuppressed))
 		}
 	default:
-		observe(host, len(due), PreflightReasonOK, "")
+		reportCycle(len(due), PreflightReasonOK)
 	}
 
 	for _, reminder := range due {

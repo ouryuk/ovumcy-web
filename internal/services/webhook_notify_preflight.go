@@ -43,8 +43,11 @@ import (
 //     that is the answer the operator is looking for.
 //  4. endpoint_invalid / private_address_blocked — the target could never be
 //     reached, whatever the cycle says. Recorded BEFORE the decision runs and
-//     left standing when the decision finds nothing due; overwritten by a real
-//     would-send verdict, because "this would fail" beats "this would not send".
+//     left standing over EVERY cycle-state verdict below, "would send"
+//     included: an owner whose endpoint cannot be reached is silent no matter
+//     what their cycle says, so "this would fail" outranks "this would not
+//     send" and "would send". The decision still runs unchanged and its due
+//     count is kept beside the block.
 //  5. logs_unreadable — the decision could not run at all.
 //  6. no_reminder_kind / predictions_suppressed / already_sent / not_due — nothing
 //     is due, and this is WHY; already_sent and not_due split on the decision's
@@ -113,9 +116,17 @@ const (
 // can act on in Ovumcy itself. The CLI's "Act now" column is exactly this flag, so
 // the classification lives beside the enum rather than in the printer.
 func preflightActionable(reason string) bool {
+	// Actionable names an outcome whose reason can change if someone acts in
+	// Ovumcy: a configuration choice (delivery off, no endpoint, no reminder kind,
+	// blocked target), a correctable defect (undecryptable or unusable endpoint,
+	// unreadable logs, a failed delivery) — as opposed to a by-design gate
+	// (predictions suppressed), a normal cycle state (already sent, not due),
+	// delivery success, or a real pass losing the claim to a concurrent one.
 	switch reason {
 	case PreflightReasonEndpointUnreadable, PreflightReasonEndpointInvalid,
-		PreflightReasonDeliveryFailed, PreflightReasonLogsUnreadable:
+		PreflightReasonDeliveryFailed, PreflightReasonLogsUnreadable,
+		PreflightReasonDeliveryDisabled, PreflightReasonNoEndpoint,
+		PreflightReasonNoReminderKind, PreflightReasonPrivateAddressBlocked:
 		return true
 	default:
 		return false
@@ -284,14 +295,15 @@ func classifyNotifyDeliveryError(err error) string {
 	if err == nil {
 		return ""
 	}
+	text := err.Error()
 	switch {
 	case isRedirectRefusal(err):
 		return "redirect_refused"
-	case strings.Contains(err.Error(), "private address refused"):
+	case strings.Contains(text, PreflightReasonPrivateAddressBlocked) || strings.Contains(text, "private address refused"):
 		return PreflightReasonPrivateAddressBlocked
-	case strings.Contains(err.Error(), "returned status"):
+	case strings.Contains(text, "returned status"):
 		return "non_2xx"
-	case strings.Contains(err.Error(), "scheme not allowed"):
+	case strings.Contains(text, "scheme not allowed"):
 		return PreflightReasonEndpointInvalid
 	default:
 		return "transport_error"

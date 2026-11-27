@@ -86,7 +86,7 @@ func TestNotifyPreflightClassifiesEveryOwnerReason(t *testing.T) {
 				record.WebhookEnabled = false
 				return preflightFixture{record: record, logs: dueLogs(record), decryptor: stubDecryptor{failFor: map[uint]bool{1: true}}, deliverer: &stubDeliverer{}}
 			},
-			wantReason: PreflightReasonDeliveryDisabled, wantHost: "", wantDue: 0,
+			wantReason: PreflightReasonDeliveryDisabled, wantHost: "", wantDue: 0, wantAction: true,
 		},
 		{
 			name: "enabled without an endpoint",
@@ -95,7 +95,7 @@ func TestNotifyPreflightClassifiesEveryOwnerReason(t *testing.T) {
 				record.WebhookURL = "   "
 				return preflightFixture{record: record, logs: dueLogs(record), decryptor: stubDecryptor{}, deliverer: &stubDeliverer{}}
 			},
-			wantReason: PreflightReasonNoEndpoint, wantHost: "", wantDue: 0,
+			wantReason: PreflightReasonNoEndpoint, wantHost: "", wantDue: 0, wantAction: true,
 		},
 		{
 			name: "unreadable ciphertext after a key rotation",
@@ -111,7 +111,7 @@ func TestNotifyPreflightClassifiesEveryOwnerReason(t *testing.T) {
 				record := dueRecord(1, "http://:8080/hook", preflightNow, 26)
 				return preflightFixture{record: record, logs: dueLogs(record), decryptor: stubDecryptor{}, deliverer: &stubDeliverer{}}
 			},
-			wantReason: PreflightReasonEndpointInvalid, wantHost: "", wantDue: 0, wantAction: true,
+			wantReason: PreflightReasonEndpointInvalid, wantHost: "", wantDue: 1, wantAction: true,
 		},
 		{
 			name: "non-http scheme",
@@ -119,7 +119,7 @@ func TestNotifyPreflightClassifiesEveryOwnerReason(t *testing.T) {
 				record := dueRecord(1, "ftp://ntfy.example/topic", preflightNow, 26)
 				return preflightFixture{record: record, logs: dueLogs(record), decryptor: stubDecryptor{}, deliverer: &stubDeliverer{}}
 			},
-			wantReason: PreflightReasonEndpointInvalid, wantHost: "ntfy.example", wantDue: 0, wantAction: true,
+			wantReason: PreflightReasonEndpointInvalid, wantHost: "ntfy.example", wantDue: 1, wantAction: true,
 		},
 		{
 			name: "private literal with the egress gate on",
@@ -127,7 +127,7 @@ func TestNotifyPreflightClassifiesEveryOwnerReason(t *testing.T) {
 				record := dueRecord(1, "http://10.0.0.5:8080/topic", preflightNow, 26)
 				return preflightFixture{record: record, logs: dueLogs(record), decryptor: stubDecryptor{}, deliverer: &stubDeliverer{}, block: true}
 			},
-			wantReason: PreflightReasonPrivateAddressBlocked, wantHost: "10.0.0.5", wantDue: 1,
+			wantReason: PreflightReasonPrivateAddressBlocked, wantHost: "10.0.0.5", wantDue: 1, wantAction: true,
 		},
 		{
 			name: "same private literal with the gate off is deliverable",
@@ -153,7 +153,7 @@ func TestNotifyPreflightClassifiesEveryOwnerReason(t *testing.T) {
 				record.WebhookNotifyOvulation = false
 				return preflightFixture{record: record, logs: dueLogs(record), decryptor: stubDecryptor{}, deliverer: &stubDeliverer{}}
 			},
-			wantReason: PreflightReasonNoReminderKind, wantHost: "ntfy.example", wantDue: 0,
+			wantReason: PreflightReasonNoReminderKind, wantHost: "ntfy.example", wantDue: 0, wantAction: true,
 		},
 		{
 			name: "the watermark already covered this cycle",
@@ -358,7 +358,7 @@ func TestNotifyPreflightReportsEveryOwnerInListingOrder(t *testing.T) {
 	}
 	// The diagnostic is compute-only: the dry-run preview still plays the role it
 	// always played, and no watermark was written.
-	if report.Pass.Due != 2 || len(report.Pass.DryRunPreview) != 2 {
+	if report.Pass.Due != 1 || len(report.Pass.DryRunPreview) != 1 {
 		t.Fatalf("aggregate dry run changed: due=%d preview=%d", report.Pass.Due, len(report.Pass.DryRunPreview))
 	}
 	if len(repo.writes()) != 0 {

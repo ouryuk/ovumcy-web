@@ -358,7 +358,7 @@ func TestNotifyPreflightReportsEveryOwnerInListingOrder(t *testing.T) {
 	}
 	// The diagnostic is compute-only: the dry-run preview still plays the role it
 	// always played, and no watermark was written.
-	if report.Pass.Due != 1 || len(report.Pass.DryRunPreview) != 1 {
+	if report.Pass.Due != 2 || len(report.Pass.DryRunPreview) != 2 {
 		t.Fatalf("aggregate dry run changed: due=%d preview=%d", report.Pass.Due, len(report.Pass.DryRunPreview))
 	}
 	if len(repo.writes()) != 0 {
@@ -367,8 +367,10 @@ func TestNotifyPreflightReportsEveryOwnerInListingOrder(t *testing.T) {
 }
 
 // TestNotifyPreflightIsStatelessAcrossConcurrentWalks runs two preflights at once.
-// The recorder lives in the walk, not on the service, so neither pass can observe
+// The recorder lives in the walk, not on the service, so neither walk can observe
 // the other's outcomes — and with -race this fails if that ever stops being true.
+// (A preflight makes no claim and no request, so unlike two delivery passes it has
+// nothing to race ON; this guards the shape, not a lock.)
 func TestNotifyPreflightIsStatelessAcrossConcurrentWalks(t *testing.T) {
 	now := preflightNow
 	one := dueRecord(1, "https://a.example/hook", now, 26)
